@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fikirhane</title>
+  <link rel="icon" href="/logo.svg">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app" id="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <span class="logo" aria-hidden="true"><svg viewBox="0 0 32 32"><rect width="32" height="32" rx="8"/><path d="M12 23V9h9M12 16h7"/></svg></span>
+        <span class="brand-name">Fikirhane</span>
+        <button class="icon-btn" id="settingsBtn" title="Ayarlar" aria-label="Ayarlar"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+        <button class="icon-btn" id="themeBtn" title="Tema değiştir" aria-label="Tema değiştir"><svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
+      </div>
+      <button class="new-btn" id="addBtn">
+        <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+        <span>Belge ekle</span>
+        <span class="new-hint">PDF, Word, metin</span>
+      </button>
+      <input type="file" id="fileInput" multiple hidden accept=".pdf,.docx,.txt,.md,.markdown,.csv,.json,.log,.html,.htm">
+      <button class="all-btn" id="allBtn" type="button"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg><span>Tüm belgelere sor</span></button>
+      <div class="section-label"><span>Belgeler</span><span class="count" id="docCount"></span></div>
+      <nav class="doc-list" id="docList" aria-label="Belgeler"></nav>
+      <div class="sidebar-foot">
+        <button type="button" class="llm-chip" id="llmChip" title="Yerel model ayarları"></button>
+        <div class="credit">
+          <span id="versionText"></span>
+          <button type="button" class="link" id="updateBtn" hidden>Güncelleme var</button>
+          <a href="https://optona.tr" target="_blank" rel="noopener">optona.tr tarafından yazılmıştır</a>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-btn mobile-only" id="menuBtn" aria-label="Menü"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+        <div class="topbar-title">
+          <div class="title" id="title">Fikirhane</div>
+          <div class="subtitle" id="subtitle"></div>
+        </div>
+        <div class="seg" id="viewSeg" hidden>
+          <button type="button" data-view="doc">Belge</button>
+          <button type="button" data-view="chat">Sohbet</button>
+        </div>
+      </header>
+      <section class="content" id="content"></section>
+      <footer class="composer-wrap">
+        <div class="composer" id="composer">
+          <textarea id="input" rows="1" placeholder="Belgelerinize bir soru sorun…" autocomplete="off"></textarea>
+          <div class="composer-bar">
+            <span class="scope" id="scope"></span>
+            <span class="spacer"></span>
+            <span class="hint">Enter gönder · Shift+Enter yeni satır</span>
+            <button class="btn ghost" id="searchBtn" type="button" title="Yapay zekâ kullanmadan, belgelerde geçen yerleri bulur">Yalnızca ara</button>
+            <button class="send-btn" id="sendBtn" aria-label="Sor" title="Sor"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+          </div>
+        </div>
+      </footer>
+    </main>
+  </div>
+
+  <dialog id="settingsDialog" class="dialog">
+    <div class="dialog-inner">
+      <div class="dialog-head"><h2>Ayarlar</h2><button class="icon-btn" id="settingsClose" type="button" aria-label="Pencereyi kapat"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <div class="dialog-body" id="settingsBody"></div>
+    </div>
+  </dialog>
+  <dialog id="pageDialog" class="dialog wide">
+    <div class="dialog-inner">
+      <div class="dialog-head"><h2 id="pageTitle"></h2><button class="icon-btn" id="pageClose" type="button" aria-label="Pencereyi kapat"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <pre class="page-text" id="pageText"></pre>
+    </div>
+  </dialog>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
