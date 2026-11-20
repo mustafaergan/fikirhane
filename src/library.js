@@ -8,12 +8,15 @@
 //   harita.md      belgenin bir sayfalık haritası
 //   sorular.json   modelin kullanıcıya sorduğu sorular ve yanıtları
 //   yorumlar.json  kullanıcının kendi notları (belgeden çıkan bilgiden ayrı tutulur)
+// Gezilen bir web uygulaması da bir belgedir (kind: "site"): her ekran bir sayfadır; ayrıca
+//   ekranlar.json  ekran kartları (alanlar, düğmeler, bağlantılar ve test seçicileri) durur.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { extractPages, makeChunks, makeSections, extOf, SUPPORTED } from './text.js';
 import { buildIndex, bm25, cosineTop, fuse } from './search.js';
+import { cardText, cardChunks, commonLinks } from './gezgin.js';
 import * as llm from './llm.js';
 
 export const home = () => process.env.FIKIRHANE_HOME || path.join(os.homedir(), '.fikirhane');
@@ -82,6 +85,33 @@ export async function addDocument(buf, name) {
   return meta;
 }
 
+/**
+ * Gezilen siteyi belge olarak ekler: her ekran kartı bir "sayfa" olur, böylece arama, anlamlandırma, onay ve soru
+ * yanıtlama belgelerle aynı yoldan çalışır. Kartların yapılı hâli (seçicilerle) ekranlar.json'da durur.
+ */
+export function addSite({ origin, start, cards }) {
+  if (!cards?.length) throw fail('no-screens');
+  const common = commonLinks(cards);
+  const pages = cards.map((c) => ({ page: c.no, text: cardText(c, cards, common) }));
+  const chunks = cardChunks(cards);
+  const id = crypto.randomBytes(5).toString('hex');
+  const host = new URL(origin).host;
+  const same = listDocs().filter((d) => d.kind === 'site' && d.origin === origin).length;
+  const meta = { id, name: same ? `${host} (${same + 1})` : host, ext: 'site', kind: 'site', origin, start, added: new Date().toISOString(), pages: pages.length, paged: true,
+    chars: pages.reduce((n, p) => n + p.text.length, 0), chunks: chunks.length, sections: makeSections(pages).length, state: 'dizinlendi', understood: 0, approved: false, embedDim: 0 };
+  writeJson(path.join(dirOf(id), 'ekranlar.json'), cards);
+  writeJson(path.join(dirOf(id), 'sayfalar.json'), pages);
+  writeJson(path.join(dirOf(id), 'parcalar.json'), chunks);
+  saveMeta(meta);
+  return meta;
+}
+/** Sitenin ekran kartları (yapılı): alanlar, düğmeler, bağlantılar ve Playwright biçiminde seçiciler */
+export function screens(id) {
+  const meta = metaOf(id);
+  if (!meta || meta.kind !== 'site') throw fail('not-found');
+  return { origin: meta.origin, approved: meta.approved, screens: part(id, 'ekranlar.json', []) };
+}
+
 export function removeDocument(id) {
   if (!metaOf(id)) throw fail('not-found');
   cancelJob(id);
@@ -95,7 +125,8 @@ export function getDocument(id) {
   if (!meta) throw fail('not-found');
   let map = '';
   try { map = fs.readFileSync(path.join(dirOf(id), 'harita.md'), 'utf8'); } catch { /* henüz yok */ }
-  return { meta, map, notes: part(id, 'notlar.json', []), questions: part(id, 'sorular.json', []), comments: part(id, 'yorumlar.json', []), job: jobs.get(id) || null };
+  const list = meta.kind === 'site' ? part(id, 'ekranlar.json', []).map((c) => ({ no: c.no, title: c.title, path: c.path, from: c.from, via: c.via, fields: c.fields.length, buttons: c.buttons.length, links: c.links.length })) : undefined;
+  return { meta, map, notes: part(id, 'notlar.json', []), questions: part(id, 'sorular.json', []), comments: part(id, 'yorumlar.json', []), screens: list, job: jobs.get(id) || null };
 }
 
 export function pageText(id, page) {
@@ -165,6 +196,16 @@ const PROMPT = {
   questions: 'Aşağıda bir belgenin haritası var. Bu belgeyi doğru yorumlayabilmek için belgenin sahibine sorulması gereken en fazla 6 soru yaz: '
     + 'belirsiz kalan noktalar, çelişkili görünen yerler, hangi bölümün güncel/geçerli olduğu, kullanıcı için neyin önemli olduğu. '
     + 'Yalnızca bir JSON dizisi döndür: ["soru 1", "soru 2"]. Başka hiçbir şey yazma.',
+  // Gezilen web uygulamaları için: kaynak ekran kartlarıdır, (s.N) ekran numarasıdır
+  siteNote: 'Bir web uygulamasının ekran kartlarını okuyorsun: her kart bir ekranın adresini, başlıklarını, alanlarını, düğmelerini ve bağlantılarını listeler. '
+    + 'Görevin bu ekranları, sonradan "şu iş hangi ekranda, nasıl yapılır" sorularına ve tarayıcı testlerine kaynak olacak şekilde nota çevirmek.\n'
+    + 'Kurallar: Yalnızca kartta yazanı kullan, tahmin ekleme. Alan ve düğme adlarını kartta yazdığı gibi, tırnak içinde yaz. Her maddenin sonuna ekran numarasını (s.N) yaz. Türkçe yaz.\n'
+    + 'Biçim:\n**Ekranlar:** her ekran için tek satır: adı, adresi, ne işe yaradığı\n**Yapılabilen işler:** maddeler: hangi ekranda hangi alanlar doldurulur, hangi düğmeye basılır\n**Geçişler:** hangi ekrandan hangisine nasıl gidilir',
+  siteMap: 'Aşağıda bir web uygulamasının ekran notları var. Bu uygulamanın bir sayfalık haritasını çıkar. Yalnızca notlarda yazanı kullan. Ekran numaralarını (s.N) koru. Türkçe yaz.\n'
+    + 'Biçim:\n# Uygulamanın amacı (2–3 cümle)\n# Ekranlar (her biri bir satır: adı, adresi, ne işe yaradığı, ekran numarası)\n# Temel akışlar (adım adım: hangi ekran, hangi alan, hangi düğme)\n# Giriş ve gezinme (giriş ekranı, ortak menü)\n# Belirsiz kalan noktalar',
+  siteQuestions: 'Aşağıda bir web uygulamasının haritası var. Bu uygulamayı doğru test edebilmek için uygulamayı bilen kişiye sorulması gereken en fazla 6 soru yaz: '
+    + 'en önemli akışlar hangileri, hangi alan hangi değerleri kabul eder, hangi işlemler geri alınamaz ve testte yapılmamalıdır, testte hangi kullanıcı ve veri kullanılmalıdır. '
+    + 'Yalnızca bir JSON dizisi döndür: ["soru 1", "soru 2"]. Başka hiçbir şey yazma.',
   answer: 'Sen Fikirhane\'sin: kullanıcının belgelerine dayanarak soru yanıtlarsın.\n'
     + 'Kurallar: Yalnızca aşağıda verilen kaynakları kullan. Her bilginin yanına kaynağını [belge adı s.N] biçiminde yaz. '
     + '"Kullanıcının notları" bölümü belgeden değil kullanıcıdan gelir; belgeyle çelişirse kullanıcının notunu esas al ve bunu belirt. '
@@ -188,12 +229,14 @@ export function understand(id) {
   if (!cfg.url || !cfg.chatModel) throw fail('no-llm');
   const sections = makeSections(part(id, 'sayfalar.json', []));
   const ask = (system, user, signal, maxTokens) => llm.chat({ url: cfg.url, key: cfg.key, model: cfg.chatModel, signal, maxTokens, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] });
+  const site = meta.kind === 'site';
+  const P = site ? { note: PROMPT.siteNote, map: PROMPT.siteMap, questions: PROMPT.siteQuestions } : PROMPT;
   return startJob(id, 'anlamlandırma', sections.length + 2, async (job) => {
     const notes = part(id, 'notlar.json', []);
     for (const s of sections) {
       if (job.state !== 'running') return;
       if (!notes.some((n) => n.i === s.i)) {
-        const note = await ask(PROMPT.note, `Belge: ${meta.name}\nSayfalar: ${s.from}–${s.to}\n\n${s.text}`, job.controller.signal, 900);
+        const note = await ask(P.note, `${site ? 'Uygulama' : 'Belge'}: ${meta.name}\n${site ? 'Ekranlar' : 'Sayfalar'}: ${s.from}–${s.to}\n\n${s.text}`, job.controller.signal, 900);
         notes.push({ i: s.i, from: s.from, to: s.to, note });
         notes.sort((a, b) => a.i - b.i);
         writeJson(path.join(dirOf(id), 'notlar.json'), notes);
@@ -212,12 +255,12 @@ export function understand(id) {
       pieces = [];
       for (const g of groups) { if (job.state !== 'running') return; pieces.push(await ask(PROMPT.group, g, job.controller.signal, 1000)); }
     }
-    const map = await ask(PROMPT.map, `Belge: ${meta.name} (${meta.pages} sayfa)\n\n${pieces.join('\n\n').slice(0, 16_000)}`, job.controller.signal, 1400);
+    const map = await ask(P.map, `${site ? 'Uygulama' : 'Belge'}: ${meta.name} (${meta.pages} ${site ? 'ekran' : 'sayfa'})\n\n${pieces.join('\n\n').slice(0, 16_000)}`, job.controller.signal, 1400);
     saveMap(id, map);
     job.done++;
     const old = part(id, 'sorular.json', []);
     if (!old.length) {
-      const qs = parseQuestions(await ask(PROMPT.questions, map, job.controller.signal, 600));
+      const qs = parseQuestions(await ask(P.questions, map, job.controller.signal, 600));
       writeJson(path.join(dirOf(id), 'sorular.json'), qs.map((q) => ({ q, answer: '' })));
     }
     job.done++;
