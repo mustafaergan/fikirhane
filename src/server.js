@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as lib from './library.js';
 import * as llm from './llm.js';
+import * as gezgin from './gezgin.js';
 import { checkUpdate, applyUpdate } from './update.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -25,6 +26,13 @@ const MESSAGES = {
   'busy': 'Bu belgede zaten bir işlem sürüyor.',
   'empty': 'Bir şey yazın.',
   'too-large': 'Dosya çok büyük (en fazla 300 MB).',
+  'bad-site': 'Geçerli bir site adresi girin (ör. https://uygulama.example.com).',
+  'no-browser': 'Bu bilgisayarda Microsoft Edge ya da Google Chrome bulunamadı.',
+  'browser-failed': 'Tarayıcı başlatılamadı.',
+  'tour-busy': 'Zaten süren bir gezinti var. Önce onu bitirin ya da ondan vazgeçin.',
+  'no-tour': 'Süren bir gezinti yok.',
+  'tour-closed': 'Tarayıcı penceresi kapanmış. Kaydedilen ekranları "Bitir ve kaydet" ile saklayabilirsiniz.',
+  'no-screens': 'Henüz hiç ekran kaydedilmedi. Açılan tarayıcıda siteyi gezin.',
 };
 const errorText = (err) => MESSAGES[err.code] ? `${MESSAGES[err.code]}${err.detail && err.code !== 'no-text' ? ` (${err.detail})` : ''}` : (err.detail || err.message);
 
@@ -69,6 +77,15 @@ export function createServer({ port = 3310, host = '127.0.0.1' } = {}) {
     ['POST', /^\/api\/docs\/([\w-]+)\/approve$/, async (m, body) => ({ ok: true, meta: lib.setApproved(m[1], body.approved) })],
     ['POST', /^\/api\/search$/, async (_m, body) => ({ ok: true, results: await lib.search(String(body.q || ''), Array.isArray(body.docs) ? body.docs : [], 12) })],
     ['POST', /^\/api\/ask$/, async (_m, body) => { const started = Date.now(); const r = await lib.ask(body.q, Array.isArray(body.docs) ? body.docs : []); console.log(`[soru] yanıtlandı: ${r.sources.length} kaynak, ${Math.round((Date.now() - started) / 1000)} sn`); return { ok: true, ...r }; }],
+    // Site gezintisi: ayrı bir tarayıcı penceresi açılır, ekranlar kart olarak kaydedilir, bitince belge olur
+    ['GET', /^\/api\/docs\/([\w-]+)\/screens$/, async (m) => lib.screens(m[1])],
+    ['GET', /^\/api\/tour$/, async () => ({ tour: gezgin.tourStatus(), browser: Boolean(gezgin.findBrowser()) })],
+    ['POST', /^\/api\/tour$/, async (_m, body) => { await gezgin.startTour({ url: body.url }); console.log('[gezinti] başladı'); return { ok: true, tour: gezgin.tourStatus() }; }],
+    ['POST', /^\/api\/tour\/capture$/, async () => ({ ok: true, ...await gezgin.captureNow(), tour: gezgin.tourStatus() })],
+    ['POST', /^\/api\/tour\/crawl$/, async (_m, body) => { gezgin.crawlTour({ limit: body.limit }); return { ok: true, tour: gezgin.tourStatus() }; }],
+    ['POST', /^\/api\/tour\/stop$/, async () => { gezgin.stopCrawl(); return { ok: true, tour: gezgin.tourStatus() }; }],
+    ['POST', /^\/api\/tour\/finish$/, async () => { const meta = lib.addSite(await gezgin.finishTour()); console.log(`[gezinti] bitti: ${meta.pages} ekran, ${meta.chunks} parça`); return { ok: true, meta }; }],
+    ['POST', /^\/api\/tour\/cancel$/, async () => { await gezgin.cancelTour(); return { ok: true }; }],
     ['GET', /^\/api\/update$/, async (_m, _b, url) => checkUpdate({ force: url.searchParams.get('refresh') === '1' })],
     ['POST', /^\/api\/update\/apply$/, async () => applyUpdate()],
   ];

@@ -22,6 +22,7 @@
         <span class="new-hint">PDF, Word, metin</span>
       </button>
       <input type="file" id="fileInput" multiple hidden accept=".pdf,.docx,.txt,.md,.markdown,.csv,.json,.log,.html,.htm">
+      <button class="all-btn" id="siteBtn" type="button" title="Bir web uygulamasını gezip ekranlarını kaydeder"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg><span>Site gez</span></button>
       <button class="all-btn" id="allBtn" type="button"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg><span>Tüm belgelere sor</span></button>
       <div class="section-label"><span>Belgeler</span><span class="count" id="docCount"></span></div>
       <nav class="doc-list" id="docList" aria-label="Belgeler"></nav>
@@ -67,6 +68,12 @@
     <div class="dialog-inner">
       <div class="dialog-head"><h2>Ayarlar</h2><button class="icon-btn" id="settingsClose" type="button" aria-label="Pencereyi kapat"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
       <div class="dialog-body" id="settingsBody"></div>
+    </div>
+  </dialog>
+  <dialog id="tourDialog" class="dialog">
+    <div class="dialog-inner">
+      <div class="dialog-head"><h2>Site gez</h2><button class="icon-btn" id="tourClose" type="button" aria-label="Pencereyi kapat"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <div class="dialog-body" id="tourBody"></div>
     </div>
   </dialog>
   <dialog id="pageDialog" class="dialog wide">

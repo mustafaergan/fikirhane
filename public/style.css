@@ -121,7 +121,15 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .q-block { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; background: var(--surface); }
 .q-block.done { border-color: var(--ok); }
 .q-block .q { font-weight: 600; margin-bottom: 8px; }
-textarea, input[type="text"], input[type="password"] { font: inherit; font-size: 13.5px; width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+.screen-list { display: flex; flex-direction: column; gap: 4px; max-height: 250px; overflow-y: auto; margin: 0 0 12px; }
+.screen { display: flex; gap: 8px; align-items: baseline; font-size: 13px; padding: 5px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); min-width: 0; }
+.screen b { color: var(--accent); font-weight: 600; flex: none; }
+.screen .s-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.screen .s-path { margin-left: auto; color: var(--text-3); font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 45%; flex: none; }
+.note-head .s-path { text-transform: none; letter-spacing: 0; font-family: var(--mono); font-weight: 400; color: var(--text-3); margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.note .s-via { color: var(--text-3); font-size: 12.5px; }
+input[type="number"].short { width: 76px; }
+textarea, input[type="text"], input[type="password"], input[type="number"] { font: inherit; font-size: 13.5px; width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
 textarea { resize: vertical; line-height: 1.45; }
 textarea:focus, input:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
 .field { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--text-2); margin-bottom: 10px; }

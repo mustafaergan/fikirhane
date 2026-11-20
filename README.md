@@ -23,6 +23,30 @@ ilgili asıl bölümlere dayanarak yanıtlanır.
 Arama iki katmanlıdır: kelime araması (BM25; Türkçe eklere dayanıklı) her zaman çalışır. Ayarlar'da bir embedding modeli
 seçilirse "Anlamsal dizin oluştur" ile anlamsal arama da eklenir ve iki sonuç harmanlanır.
 
+## Site gezme
+
+Belgelerin yanında bir **web uygulaması** da tanıtılabilir. Sol üstteki **Site gez** ayrı bir tarayıcı penceresi açar
+(bu bilgisayardaki Microsoft Edge ya da Google Chrome; ek kurulum gerekmez). Orada giriş yapıp ekranları gezersiniz;
+her ekranın yapısı bir **ekran kartı** olarak kaydedilir: adres, başlıklar, alanlar (türü, zorunlu mu), düğmeler,
+bağlantılar, tablo sütunları ve o ekrana hangi tıklamayla gelindiği. "Bağlantıları otomatik gez" kaydedilen ekranlardaki
+bağlantıları izleyerek kalan ekranları da toplar. "Bitir ve kaydet" ile site bir belge olur: aranır, yerel modelle
+anlamlandırılır (ekranlar, temel akışlar), sorularla beslenir, onaylanır.
+
+Amaç, bir uygulamayı bir kez öğrenip sonra her seferinde yeniden keşfetmemektir: "üye nereden eklenir, hangi alanlar
+zorunlu" sorusu ekran kartlarından yanıtlanır; kartlardaki seçiciler (`getByLabel('Fiyat')`,
+`getByRole('button', { name: 'Kaydet' })` gibi, Playwright biçiminde) tarayıcı testlerinde doğrudan kullanılabilir.
+Yapılı kartlar `GET /api/docs/<kimlik>/screens` adresinden okunur.
+
+Güvenli sınırlar:
+
+- Fikirhane **hiçbir düğmeye basmaz, hiçbir formu göndermez**. Otomatik gezinti yalnızca aynı sitedeki bağlantıların
+  adresine gider; çıkış, silme, onay, indirme gibi görünen bağlantıları ve dosyaları atlar. Yine de adresine gidilince
+  bir şeyi değiştiren bağlantıları olan uygulamalarda otomatik gezintiyi kullanmayın; elle gezin.
+- Alanlara yazdıklarınız, parolalar, sorgu değerleri ve tablo satırlarındaki veriler **kaydedilmez**; kartta yalnızca
+  yapı (etiketler, adlar) durur. Aynı kalıptaki adresler (`/urun/12`, `/urun/57`) tek ekran sayılır.
+- Tarayıcı geçici bir profille açılır; gezinti bitince profil (çerezler, oturum) silinir. Başka sitedeki sayfalar
+  (ör. ortak giriş sayfası) kaydedilmez.
+
 ## Yerel dil modeli
 
 OpenAI uyumlu uç noktası olan herhangi bir yerel sunucu kullanılır: **Ollama** (`http://localhost:11434`),
@@ -66,6 +90,7 @@ Her şey `~/.fikirhane` altında düz dosyalar olarak durur; elle okunup düzelt
 ~/.fikirhane/belgeler/<kimlik>/meta.json   ad, sayfa sayısı, durum
                                asil.<uzantı>, sayfalar.json, parcalar.json, vektorler.bin
                                notlar.json, harita.md, sorular.json, yorumlar.json
+                               ekranlar.json (yalnızca gezilen sitelerde: ekran kartları ve seçiciler)
 ```
 
 ## Güvenlik
@@ -79,6 +104,8 @@ düz metin durur ve arayüze geri gönderilmez.
 - Taranmış (resim) PDF'lerden metin çıkmaz; metin içeren bir sürüm gerekir. Tablolar ve şekiller zayıf kalır.
 - Anlamlandırma süresi yerel modelin hızına bağlıdır: 200 sayfalık bir belge onlarca model çağrısı demektir.
 - Notlar ve yanıtlar modelin çıkarımıdır; hatalı olabilir. Önemli kararlarda kaynak sayfayı açın.
+- Site gezmede iç çerçeveler (iframe) ve kapalı gölge ağaçları okunmaz; erişilebilir adı olmayan düğmeler yalnızca
+  sayılır. Arayüz değişince kartlar eskir: site yeniden gezilmelidir (eski kayıt güncellenmez, yeni belge oluşur).
 - Atölye ile bağlantı henüz yoktur; önce Fikirhane kendi başına olgunlaştırılıyor.
 
 optona.tr tarafından yazılmıştır. MIT lisansı.
