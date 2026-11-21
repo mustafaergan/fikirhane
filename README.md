@@ -48,7 +48,7 @@ kısa bir `text` bulunur:
 | `GET /api/sites/<kimlik>/screens/<no>` | Tek ekran: bütün alanlar, düğmeler, bağlantılar ve seçicileri |
 | `GET /api/sites/<kimlik>/route/<no>` | O ekrana gidiş: doğrudan adres ve kaydedilen tıklama zinciri (`page.goto(…)`, `page.getByRole(…).click()`) |
 
-**Atölye bağlantısı:** [Atölye](https://github.com/mustafaergan/atolye) 0.33.0'dan beri bu uçları kendi araçlarıyla
+**Atölye bağlantısı:** [Atölye](https://github.com/mustafaergan/atolye) 0.34.0'dan beri bu uçları kendi araçlarıyla
 kullanır (Atölye'de Bağlantılar > Fikirhane > Etkinleştir; adres ya da anahtar girilmez). Atölye'deki yapay zekâ
 tarayıcıyla iş yapmadan önce ekranı ve seçicileri Fikirhane'ye sorar, çok adımlı işi senaryo olarak kaydeder ve
 sonraki seferlerde tek çağrıyla çalıştırır. Deneme sitesinde ekranı bulma, seçicileri alma, 7 adımlı senaryoyu kaydetme
