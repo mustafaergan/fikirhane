@@ -43,6 +43,13 @@ test('tıklamanın riski: çıkış yasak, silme/gönderme her seferinde sorulur
   assert.equal(kesif.riskOf({ kind: 'button', role: 'tab', name: 'Ödemeler' }, site), 'güvenli');
 });
 
+test('parola dosyası (.properties): yorumlar, boşluklar, kaçışlar ve Türkçe harfler okunur', () => {
+  const m = kesif.parseProps(['# yorum', '! bu da yorum', '', 'uygulama.example.com.parola=gizli=deger:1', '  uygulama.example.com.kullanici_adi : ayşe.test  ',
+    String.raw`ters\\egik=a\\b`, String.raw`bosluklu\ anahtar=x`, String.raw`satir=bir\niki`, String.raw`unicode=\u015fifre`, 'bos='].join('\n'));
+  assert.deepEqual([...m], [['uygulama.example.com.parola', 'gizli=deger:1'], ['uygulama.example.com.kullanici_adi', 'ayşe.test  '], [String.raw`ters\egik`, String.raw`a\b`], ['bosluklu anahtar', 'x'],
+    ['satir', 'bir\niki'], ['unicode', 'şifre'], ['bos', '']]);
+});
+
 // ---------- Deneme sitesi ----------
 const seenSite = { searches: [], saved: [], loggedOut: 0, logins: [] };
 const page = (title, body) => `<!doctype html><html lang="tr"><head><meta charset="utf-8"><title>${title}</title></head><body><h1>${title}</h1>${body}</body></html>`;
@@ -201,7 +208,11 @@ test('model siteyi gezer: giriş bilgisini sorar, parolayı görmez, çıkışa 
 
   // Sorulanlar kaydedildi: alan değeri, parolanın yalnızca sorulduğu, düz soru ve yanıtı, izin kararları
   const file = fs.readFileSync(path.join(tmp, 'gezgin-yanitlar.json'), 'utf8');
-  assert.ok(!file.includes('gizli-parola-123'), 'parola diske yazılmaz');
+  assert.ok(!file.includes('gizli-parola-123'), 'parola yanıt dosyasına yazılmaz');
+  // Parola ayrı bir .properties dosyasında durur: <sunucu adı>.<alan adı>=değer
+  const props = kesif.parseProps(fs.readFileSync(path.join(tmp, 'gezgin-parolalar.properties'), 'utf8'));
+  assert.deepEqual([...props], [[`${new URL(siteUrl).host.replace(':', '_')}.parola`, 'gizli-parola-123']]);
+  assert.ok(!fs.readFileSync(path.join(tmp, 'gezgin-parolalar.properties'), 'utf8').includes('ayse.test'), 'parola olmayan yanıt bu dosyaya yazılmaz');
   const store = JSON.parse(file)[siteUrl];
   assert.deepEqual([store.alanlar['kullanıcı adı'].value, store.alanlar.parola.secret, 'value' in store.alanlar.parola], ['ayse.test', true, false]);
   assert.deepEqual(store.sorular.map((q) => [q.q, q.a]), [['Hangi adla deneme kaydı açayım?', 'Deneme Müşteri adını kullan']]);
@@ -222,6 +233,8 @@ test('model siteyi gezer: giriş bilgisini sorar, parolayı görmez, çıkışa 
 
 test('aynı sitede ikinci gezinti: kayıtlı yanıtlar ve kararlar yeniden sorulmaz; "Unut" hepsini siler', { skip: noBrowser }, async () => {
   const before = seenSite.logins.length;
+  // Dosya elle de düzenlenebilir: başka bir sitenin satırı eklenir (yorumlar ve boş satırlar sorun olmaz)
+  fs.appendFileSync(path.join(tmp, 'gezgin-parolalar.properties'), ['', '! elle eklendi', '  baska.example.com.parola = dokunulmaz', ''].join('\n'));
   const started = await call('/api/tour', { url: siteUrl, explore: { limit: 30 } });
   assert.equal(started.ok, true, started.error);
   assert.deepEqual(started.tour.explore.saved.fields, [{ name: 'Kullanıcı adı', secret: false }, { name: 'Parola', secret: true }]);
@@ -232,7 +245,7 @@ test('aynı sitede ikinci gezinti: kayıtlı yanıtlar ve kararlar yeniden sorul
     asked.push(x.pending.kind === 'girdi' ? `girdi:${x.pending.fields.map((f) => f.name).join(',')}` : `${x.pending.kind}:${x.pending.soru || x.pending.what}`);
     await call('/api/tour/explore/answer', { id: x.pending.id, skip: true, allow: false });
   }
-  // Giriş bilgileri (kayıtlı kullanıcı adı + bellekteki parola) ve iki düğme kararı sorulmadı
+  // Giriş bilgileri (kayıtlı kullanıcı adı + dosyadaki parola) ve iki düğme kararı sorulmadı
   assert.deepEqual(asked, ['soru:Hangi adla deneme kaydı açayım?', 'girdi:Onay parolası']);
   assert.equal(seenSite.logins.length, before + 1, 'kayıtlı bilgilerle giriş yapıldı');
   assert.deepEqual([seenSite.saved, seenSite.loggedOut], [[], 0]);
@@ -241,5 +254,7 @@ test('aynı sitede ikinci gezinti: kayıtlı yanıtlar ve kararlar yeniden sorul
   const forgot = await call('/api/tour/explore/forget', {});
   assert.deepEqual(forgot.tour.explore.saved, { fields: [], questions: [], decisions: [] });
   assert.equal(JSON.parse(fs.readFileSync(path.join(tmp, 'gezgin-yanitlar.json'), 'utf8'))[siteUrl], undefined);
+  const left = kesif.parseProps(fs.readFileSync(path.join(tmp, 'gezgin-parolalar.properties'), 'utf8'));
+  assert.deepEqual([...left], [['baska.example.com.parola', 'dokunulmaz']], 'bu sitenin parolası silinir, başka sitenin satırı kalır');
   await call('/api/tour/cancel', {});
 });

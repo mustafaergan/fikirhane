@@ -111,8 +111,13 @@ saklar. Pencerede modelin adımları canlı görünür; istediğiniz an durdurab
   tarayıcıya Fikirhane yazar; **modele gönderilmez**. Parola türündeki alanı model hiçbir koşulda kendi dolduramaz.
   Model düz bir soru da sorabilir ("hangi müşteriyle deneyeyim?"); o yanıt modele verilir.
 - **Sorulanlar kaydedilir.** Verdiğiniz alan değerleri, düz soruların yanıtları ve düğme kararları siteye göre
-  `~/.fikirhane/gezgin-yanitlar.json` dosyasında durur; aynı sitede bir daha sorulmaz. **Parola diske yazılmaz**: yalnızca
-  sorulduğu kaydedilir, değeri Fikirhane kapanana kadar bellekte tutulur. Pencerede "Unut" hepsini siler.
+  `~/.fikirhane/gezgin-yanitlar.json` dosyasında durur; aynı sitede bir daha sorulmaz. Pencerede "Unut" hepsini siler.
+- **Parolalar ayrı bir dosyada durur:** `~/.fikirhane/gezgin-parolalar.properties`. Her satır `<sunucu adı>.<alan adı>=değer`
+  biçimindedir (ör. `uygulama.sirket.com.parola=…`; adresteki `:` yerine `_` yazılır, alan adı küçük harfe ve Türkçe
+  harfsiz hâle çevrilir: "Kullanıcı adı" → `kullanici_adi`). Dosyayı elle de yazabilirsiniz; model o alanı istediğinde
+  size sormadan oradan doldurulur. Parola olmayan alanları da buraya koyabilirsiniz. **Dosya düz metindir**: şifrelenmez,
+  bu bilgisayarı kullanan herkes okuyabilir; paylaşmayın, yedeğe ya da depoya koymayın. Parola modele, kayıt dosyasına ve
+  senaryolara yazılmaz. Fikirhane dosyayı yeniden yazarken kendi başlık satırlarını koyar; elle eklediğiniz yorumlar kalmaz.
 - **Riskli adımda izin ister.** "Çıkış" görünümlü öğelere hiç basmaz, sitenin dışına çıkmaz. Silme, onaylama, gönderme,
   indirme gibi işlemlerden önce her seferinde; ne yaptığı adından anlaşılmayan düğmelerden ("Kaydet" gibi) önce bir kez
   sorar ve kararı anımsar. Gezinme, arama, sekme ve menüler sorulmaz. Onay kipi değiştirilebilir: her adımda sorsun ya da
@@ -216,6 +221,7 @@ Her şey `~/.fikirhane` altında düz dosyalar olarak durur; elle okunup düzelt
 ~/.fikirhane/ayarlar.json                 yerel model sunucusu
 ~/.fikirhane/kapi.json                    çalışırken: port ve o açılışa özel anahtar (yerel araçların doğrulaması için)
 ~/.fikirhane/gezgin-yanitlar.json         "Model gezsin" sırasında sorulanlar ve yanıtlarınız, siteye göre (parola değeri yazılmaz)
+~/.fikirhane/gezgin-parolalar.properties  "Model gezsin" için parolalar: <sunucu adı>.<alan adı>=değer (düz metin; elle de yazılabilir)
 ~/.fikirhane/belgeler/<kimlik>/meta.json   ad, sayfa sayısı, durum
                                asil.<uzantı>, sayfalar.json, parcalar.json, vektorler.bin
                                notlar.json, harita.md, sorular.json, yorumlar.json

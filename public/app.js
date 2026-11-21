@@ -315,7 +315,7 @@ document.addEventListener('drop', (e) => { if (e.dataTransfer?.files?.length) up
 const tour = { data: null, browser: true, timer: null, note: null, url: '', limit: 30, goal: '', mode: 'emin-degilse', steps: 40, answers: {}, formOpen: false };
 // Model gezsin: siteyi dil modeli gezer; bilmediğini sorar. Onay kipleri sunucudaki kesif.js ile aynı adları taşır.
 const MODE_TEXT = { 'emin-degilse': 'Emin olmadığı düğmelerde sorsun (önerilen)', 'her-adim': 'Her adımda sorsun', serbest: 'Hiç sormasın (yalnızca deneme ortamında)' };
-const EXPLORE_INFO = 'Model ekranları dolaşır ve akışları çıkarır; giriş bilgisi ya da doldurulması gereken bir alan çıkınca size sorar. Verdiğiniz değerleri tarayıcıya Fikirhane yazar, modele göndermez. Sorulanlar bu site için kaydedilir ve bir daha sorulmaz (parola diske yazılmaz; yalnızca Fikirhane kapanana kadar bellekte tutulur). Model "Çıkış"a basmaz; silme, gönderme gibi işlemlerden ve ne yaptığı adından anlaşılmayan düğmelerden önce size sorar.';
+const EXPLORE_INFO = 'Model ekranları dolaşır ve akışları çıkarır; giriş bilgisi ya da doldurulması gereken bir alan çıkınca size sorar. Verdiğiniz değerleri tarayıcıya Fikirhane yazar, modele göndermez. Sorulanlar bu site için kaydedilir ve bir daha sorulmaz (parolalar bu bilgisayarda gezgin-parolalar.properties dosyasına düz metin olarak yazılır). Model "Çıkış"a basmaz; silme, gönderme gibi işlemlerden ve ne yaptığı adından anlaşılmayan düğmelerden önce size sorar.';
 function exploreForm() {
   const goal = el('textarea', { rows: '2', placeholder: 'Örn. "Rezervasyon arama ve ayrıntı ekranlarını çıkar". Boş bırakırsanız model ana ekranları ve temel işleri kendisi arar.' });
   goal.value = tour.goal;
@@ -357,9 +357,9 @@ function pendingForm(p) {
       input.oninput = () => { a.values[f.no] = input.value; };
       input.onchange = input.oninput;
       input.onkeydown = (e) => { if (e.key === 'Enter') submit(); };
-      return el('label', { class: 'field' }, el('span', { text: `${f.name}${f.required ? ' (zorunlu)' : ''}${f.secret ? ' · kaydedilmez, modele gönderilmez' : ''}` }), input);
+      return el('label', { class: 'field' }, el('span', { text: `${f.name}${f.required ? ' (zorunlu)' : ''}${f.secret ? ' · modele gönderilmez' : ''}` }), input);
     }),
-    el('p', { class: 'xnote', text: 'Değerleri tarayıcıya Fikirhane yazar; modele gönderilmez. Parola dışındakiler bu site için kaydedilir.' }),
+    el('p', { class: 'xnote', text: 'Değerleri tarayıcıya Fikirhane yazar; modele gönderilmez. Bu site için kaydedilir ve bir daha sorulmaz; parolalar gezgin-parolalar.properties dosyasına (düz metin) yazılır.' }),
     el('div', { class: 'actions' }, el('button', { class: 'btn primary', type: 'button', text: 'Doldur ve devam et', onclick: submit }),
       el('button', { class: 'btn', type: 'button', text: 'Tarayıcıda kendim yaptım', title: 'Açık tarayıcı penceresinde bu adımı (ör. girişi) kendiniz yapın, sonra buna basın', onclick: () => send({ manual: true }) }),
       el('button', { class: 'btn ghost', type: 'button', text: 'Bu bilgiyi verme', onclick: () => send({ skip: true }) })));

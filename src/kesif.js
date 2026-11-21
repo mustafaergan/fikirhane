@@ -5,8 +5,9 @@
 // Kurallar (gevşetme):
 //   - Model bilmediği değeri uyduramaz: kullanıcıya sorulur. Kullanıcının alanlara verdiği değerler tarayıcıya Fikirhane
 //     tarafından yazılır, modele GÖNDERİLMEZ. Parola türündeki alanı model hiçbir koşulda kendi dolduramaz.
-//   - Sorulanlar ve yanıtlar siteye göre saklanır (<veri klasörü>/gezgin-yanitlar.json) ve bir daha sorulmaz. Parolanın
-//     değeri diske yazılmaz: yalnızca Fikirhane açık kaldığı sürece bellekte durur.
+//   - Sorulanlar ve yanıtlar siteye göre saklanır (<veri klasörü>/gezgin-yanitlar.json) ve bir daha sorulmaz. Parolalar
+//     o dosyaya değil, ayrı bir dosyaya yazılır: gezgin-parolalar.properties (düz metin; kullanıcı böyle istedi).
+//     Parola hiçbir zaman modele, kayıt dosyasına (log) ya da senaryoya yazılmaz.
 //   - Çıkış görünümlü öğelere hiç basılmaz. Silme/onaylama/gönderme gibi veriyi değiştirebilecek tıklamalar ve ne yaptığı
 //     addan anlaşılmayan düğmeler için önce kullanıcıya sorulur ("sormasın" kipi dışında).
 //   - Sitenin dışına çıkan bağlantılara gidilmez (giriş için yönlenilen ortak oturum sayfası dışında).
@@ -39,7 +40,38 @@ const slug = (name) => {
 // ---------- Kayıtlı yanıtlar ----------
 const home = () => process.env.FIKIRHANE_HOME || path.join(os.homedir(), '.fikirhane');
 const answersFile = () => path.join(home(), 'gezgin-yanitlar.json');
-const secrets = new Map(); // "<site>|<alan>" → parola; yalnızca bellekte
+// Parolalar ayrı bir dosyada durur: <veri klasörü>/gezgin-parolalar.properties (kullanıcının isteği, 2026-11-22).
+// Düz metindir (anahtar=değer); elle de yazılabilir. Anahtar: <sunucu adı>.<alan adı>, ör. uygulama.example.com.parola
+// Aynı dosyaya parola olmayan alanlar da elle yazılabilir (ör. uygulama.example.com.kullanici_adi); kayıtlı yanıttan önce gelir.
+const secretsFile = () => path.join(home(), 'gezgin-parolalar.properties');
+const hostKey = (origin) => { try { return new URL(origin).host.replace(/:/g, '_'); } catch { return 'site'; } };
+const propKey = (origin, name) => `${hostKey(origin)}.${slug(name)}`;
+const PROPS_HEAD = ['# Fikirhane: "Model gezsin" sırasında verdiğiniz parolalar. DÜZ METİNDİR; bu dosyayı paylaşmayın.', '# Biçim: <sunucu adı>.<alan adı>=değer   (ör. uygulama.example.com.parola=...)',
+  '# Elle düzenleyebilirsiniz; parola olmayan alanları da buraya yazabilirsiniz (ör. uygulama.example.com.kullanici_adi=...).'];
+/** .properties metnini okur: # ve ! yorumdur; anahtar ile değer ilk = ya da : ile ayrılır; \\ kaçışları çözülür */
+export function parseProps(text) {
+  const out = new Map();
+  const un = (s) => s.replace(/\\(u[0-9a-fA-F]{4}|.)/g, (_m, c) => (c.length === 5 ? String.fromCharCode(parseInt(c.slice(1), 16)) : c === 'n' ? '\n' : c === 't' ? '\t' : c === 'r' ? '\r' : c));
+  for (const raw of String(text || '').replace(/^\uFEFF/, '').split(/\r?\n/)) {
+    const line = raw.replace(/^[ \t]+/, '');
+    if (!line || line[0] === '#' || line[0] === '!') continue;
+    let i = 0;
+    while (i < line.length && !(line[i] === '=' || line[i] === ':')) i += line[i] === '\\' ? 2 : 1;
+    const key = un(line.slice(0, i).replace(/[ \t]+$/, ''));
+    if (key) out.set(key, un(line.slice(i + 1).replace(/^[ \t]+/, '')));
+  }
+  return out;
+}
+const propLine = (key, value) => `${key.replace(/[\\=: #!]/g, '\\$&')}=${String(value).replace(/\\/g, '\\\\').replace(/\r/g, '\\r').replace(/\n/g, '\\n').replace(/^[ \t]/, '\\$&')}`;
+const readProps = () => { try { return parseProps(fs.readFileSync(secretsFile(), 'utf8')); } catch { return new Map(); } };
+function writeProps(map) {
+  fs.mkdirSync(home(), { recursive: true });
+  // Kullanıcının kendi yorum satırları korunmaz; dosya her yazışta başlığıyla yeniden kurulur
+  fs.writeFileSync(secretsFile(), `${[...PROPS_HEAD, '', ...[...map].sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => propLine(k, v))].join('\n')}\n`, { mode: 0o600 });
+}
+/** Dosyadaki değer (parola ya da elle yazılmış başka bir alan); yoksa undefined */
+const propGet = (origin, name) => { const v = readProps().get(propKey(origin, name)); return v === '' ? undefined : v; };
+function propSet(origin, name, value) { const m = readProps(); m.set(propKey(origin, name), value); writeProps(m); }
 const readAll = () => { try { const d = JSON.parse(fs.readFileSync(answersFile(), 'utf8')); return d && typeof d === 'object' ? d : {}; } catch { return {}; } };
 function load(origin) {
   const d = readAll()[origin] || {};
@@ -61,7 +93,9 @@ export function forgetAnswers(origin) {
   const all = readAll();
   delete all[origin];
   try { fs.writeFileSync(answersFile(), JSON.stringify(all, null, 1)); } catch { /* dosya yok */ }
-  for (const k of [...secrets.keys()]) if (k.startsWith(`${origin}|`)) secrets.delete(k);
+  const props = readProps();
+  const mine = [...props.keys()].filter((k) => k.startsWith(`${hostKey(origin)}.`));
+  if (mine.length) { for (const k of mine) props.delete(k); writeProps(props); }
 }
 
 // ---------- Modelle konuşma ----------
@@ -227,7 +261,7 @@ async function askFields(tour, x, s, fields, soru) {
   const missing = [];
   for (const f of fields) {
     const key = keyOf(f);
-    const prior = isSecret(f) ? secrets.get(`${tour.origin}|${key}`) : store.alanlar[key]?.value;
+    const prior = propGet(tour.origin, f.name) ?? (isSecret(f) ? undefined : store.alanlar[key]?.value);
     // Kayıtlı değer bu gezintide bir kez kullanıldıysa ve model yeniden istiyorsa işe yaramamış olabilir: kullanıcıya sorulur
     if (prior !== undefined && prior !== '' && !x.used.has(key)) ready.set(f.no, prior); else missing.push(f);
   }
@@ -250,7 +284,7 @@ async function askFields(tour, x, s, fields, soru) {
     const key = keyOf(f);
     const secret = isSecret(f);
     x.used.add(key);
-    if (secret) secrets.set(`${tour.origin}|${key}`, value);
+    if (secret && propGet(tour.origin, f.name) !== value) propSet(tour.origin, f.name, value);
     fresh.alanlar[key] = secret ? { name: S(f.name), secret: true, at: new Date().toISOString() } : { name: S(f.name), value: value.slice(0, 500), at: new Date().toISOString() };
     // Senaryoda değer değil değişken durur: betik çalışırken FIKIRHANE_VAR_… ile verilir
     if (f.locator) x.flow.steps.push({ do: f.type === 'select' ? 'select' : 'fill', locator: f.locator, value: `{{${secret ? 'parola' : slug(f.name)}}}` }); else x.flow.ok = false;
