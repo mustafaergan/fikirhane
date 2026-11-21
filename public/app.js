@@ -348,6 +348,42 @@ function renderSettings(note) {
   const key = inp('', { type: 'password', placeholder: s.hasKey ? 'Kayıtlı (değiştirmek için yenisini yazın)' : 'Çoğu yerel sunucuda gerekmez' });
   const keep = () => { state.draft = { url: url.value, chatModel: chat.value, embedModel: embed.value }; };
   const body = () => ({ url: url.value, chatModel: chat.value, embedModel: embed.value, key: key.value });
+  // Dışa / içe aktarma (dosya biçimi Atölye ile ortak; API anahtarı şifreleme anahtarıyla korunur)
+  const io = state.io;
+  const close = el('button', { class: 'btn ghost', type: 'button', text: 'Vazgeç', onclick: () => { keep(); state.io = null; renderSettings(); } });
+  const doImport = async (extra = {}) => {
+    const r = await api('/api/settings/import', { data: state.io.data, pass: state.io.pass || '', ...extra });
+    if (r.ok && r.choose) { state.io = { ...state.io, choose: r.choose }; return renderSettings(); }
+    if (r.ok) {
+      state.config.settings = r.settings; state.draft = null; state.io = null; renderChip(); render();
+      return renderSettings({ kind: 'ok', text: `İçe aktarıldı: ${r.model}. "Bağlantıyı dene" ile doğrulayın.${r.anthropic ? ' Bu kayıt Atölye\'de Anthropic uyumlu olarak tanımlı; Fikirhane OpenAI uyumlu uç noktayı kullanır, sunucu onu sunmuyorsa çalışmaz.' : ''}` });
+    }
+    if (r.code === 'need-pass') { state.io = { ...state.io, ask: true }; return renderSettings(); }
+    if (r.code !== 'bad-pass') state.io = null;
+    renderSettings({ kind: 'err', text: r.error });
+  };
+  const doExport = async () => {
+    const r = await api('/api/settings/export', { pass: state.io.pass });
+    if (r.ok) { downloadJson('fikirhane-yerel-llm.json', r.file); state.io = null; }
+    renderSettings(r.ok ? { kind: 'ok', text: 'Dışa aktarıldı: fikirhane-yerel-llm.json' } : { kind: 'err', text: r.error });
+  };
+  const picker = el('input', { type: 'file', accept: '.json,application/json', hidden: true });
+  picker.onchange = async () => { const f = picker.files[0]; if (!f) return; keep(); state.io = { mode: 'import', data: await f.text(), pass: '' }; doImport(); };
+  const pass = inp(io?.pass, io?.mode === 'import' ? { type: 'password', placeholder: 'Dosyanın şifreleme anahtarı' } : {});
+  pass.oninput = () => { state.io.pass = pass.value; };
+  pass.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); if (io.mode === 'export') doExport(); else doImport(); } };
+  const ioPanel = !io ? null
+    : io.mode === 'export' ? el('div', { class: 'card' },
+      field('Şifreleme anahtarı', pass, 'API anahtarı dosyaya açık yazılmaz; bu anahtarla şifrelenir ve içe aktarırken aynı anahtar sorulur. Değiştirmezseniz anahtar "fikirhane" olur. Dosya Atölye\'de de içe aktarılabilir.'),
+      el('div', { class: 'actions' }, el('button', { class: 'btn primary', type: 'button', text: 'Dosyayı indir', onclick: doExport }), close))
+      : io.choose ? el('div', { class: 'card' },
+        el('p', { text: 'Dosyada birden çok model var. Fikirhane tek bir model kullanır; hangisi alınsın?' }),
+        io.choose.map((m) => el('button', { type: 'button', class: 'source', onclick: () => doImport({ pick: m.i }) }, el('b', { text: m.name }), `${m.model} · ${m.url}${m.kind === 'anthropic' ? ' · Anthropic uyumlu' : ''}`)),
+        el('div', { class: 'actions', style: 'margin-top:10px' }, close))
+        : io.ask ? el('div', { class: 'card' },
+          field('Şifreleme anahtarı', pass, 'Dosya dışa aktarılırken kullanılan anahtarı yazın. Atölye\'de değiştirmediyseniz anahtar "atolye", Fikirhane\'de "fikirhane" olur.'),
+          el('div', { class: 'actions' }, el('button', { class: 'btn primary', type: 'button', text: 'İçe aktar', onclick: () => doImport() }), close))
+          : null;
   fill($('#settingsBody'),
     el('p', { text: 'Fikirhane bu bilgisayarda ya da yerel ağınızda çalışan bir dil modeli sunucusunu kullanır (Ollama, LM Studio, llama.cpp vb.). Belgeleriniz yalnızca yazdığınız adrese gider.' }),
     field('Sunucu adresi', url, 'Ollama: http://localhost:11434 · LM Studio: http://localhost:1234'),
@@ -368,13 +404,26 @@ function renderSettings(note) {
         const r = await api('/api/settings', body());
         if (r.ok) { state.config.settings = r.settings; state.draft = null; renderChip(); render(); }
         renderSettings(r.ok ? { kind: 'ok', text: 'Kaydedildi.' } : { kind: 'err', text: r.error });
-      } })));
+      } }),
+      el('span', { class: 'spacer' }),
+      s.ready && el('button', { class: 'btn', type: 'button', text: 'Dışa aktar', title: 'Yerel model ayarını dosyaya yazar (API anahtarı şifreli)', onclick: () => { keep(); state.io = { mode: 'export', pass: 'fikirhane' }; renderSettings(); } }),
+      el('button', { class: 'btn', type: 'button', text: 'İçe aktar', title: 'Fikirhane\'den ya da Atölye\'den dışa aktarılmış yerel model dosyasını alır', onclick: () => picker.click() }),
+      picker),
+    ioPanel && el('div', { style: 'margin-top:12px' }, ioPanel));
+  // Bölüm pencerenin altında açılır: küçük pencerede de görünsün
+  if (ioPanel) { ioPanel.scrollIntoView({ block: 'nearest' }); if (!io.choose) { pass.focus(); pass.select(); } }
+}
+function downloadJson(name, data) {
+  const a = el('a', { href: URL.createObjectURL(new Blob([`${JSON.stringify(data, null, 2)}\n`], { type: 'application/json' })), download: name });
+  document.body.append(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 function renderChip() {
   const s = state.config.settings;
   $('#llmChip').replaceChildren(el('span', { class: `dot ${s.ready ? 'ok' : 'warn'}` }), el('span', { text: s.ready ? `Yerel model: ${s.chatModel}` : 'Yerel model tanımlı değil (ayarla)' }));
 }
-const openSettings = () => { state.draft = null; renderSettings(); $('#settingsDialog').showModal(); };
+const openSettings = () => { state.draft = null; state.io = null; renderSettings(); $('#settingsDialog').showModal(); };
 $('#settingsBtn').onclick = openSettings;
 $('#llmChip').onclick = openSettings;
 $('#settingsClose').onclick = () => $('#settingsDialog').close();

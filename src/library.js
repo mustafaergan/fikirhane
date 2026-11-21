@@ -35,11 +35,70 @@ export function settings() {
 }
 export const publicSettings = () => { const s = settings(); return { url: s.url, chatModel: s.chatModel, embedModel: s.embedModel, hasKey: Boolean(s.key), ready: Boolean(s.url && s.chatModel) }; };
 export function saveSettings({ url, chatModel, embedModel, key } = {}) {
-  const u = String(url || '').trim().replace(/\/+$/, '').replace(/\/v1$/, '');
+  const u = llm.base(url);
   if (!llm.validUrl(u)) throw fail('bad-url');
   const old = settings();
-  writeJson(settingsFile(), { url: u, chatModel: String(chatModel || '').trim(), embedModel: String(embedModel || '').trim(), key: String(key || '').trim() || old.key });
+  writeJson(settingsFile(), { url: u, chatModel: String(chatModel || '').trim(), embedModel: String(embedModel || '').trim(),
+    key: String(key || '').trim() || (old.url === u ? old.key : '') }); // anahtar boşsa eskisi kalır; ama başka bir sunucuya taşınmaz
   return publicSettings();
+}
+
+// Dışa / içe aktarma: yerel model ayarı tek bir JSON dosyasına yazılır. Dosya biçimi Atölye'ninkiyle aynıdır
+// (app: "atolye", type: "yerel-llm"), böylece iki uygulama birbirinin dosyasını içe aktarabilir. API anahtarı dosyada
+// açık durmaz: verilen şifreleme anahtarıyla (boş bırakılırsa "fikirhane") AES-256-GCM ile şifrelenir, içe aktarırken
+// aynı anahtar istenir. Varsayılan anahtar herkesçe bilindiği için gizlilik sağlamaz; kendi anahtarınızı yazın.
+export const EXPORT_PASS = 'fikirhane';
+const passKey = (pass, salt) => crypto.scryptSync(String(pass), salt, 32);
+
+export function exportSettings({ pass } = {}) {
+  const s = settings();
+  if (!s.url || !s.chatModel) throw fail('nothing-to-export');
+  const salt = crypto.randomBytes(16);
+  const seal = (text) => {
+    const iv = crypto.randomBytes(12);
+    const c = crypto.createCipheriv('aes-256-gcm', passKey(String(pass || '') || EXPORT_PASS, salt), iv);
+    const data = Buffer.concat([c.update(text, 'utf8'), c.final()]);
+    return { iv: iv.toString('base64'), tag: c.getAuthTag().toString('base64'), data: data.toString('base64') };
+  };
+  return { app: 'atolye', type: 'yerel-llm', version: 1, from: 'fikirhane', salt: salt.toString('base64'),
+    models: [{ name: s.chatModel, url: s.url, model: s.chatModel, kind: 'openai', ...(s.embedModel ? { embedModel: s.embedModel } : {}), ...(s.key ? { key: seal(s.key) } : {}) }] };
+}
+
+/**
+ * Dışa aktarılmış dosyadan (Fikirhane ya da Atölye) yerel model ayarını alır. Fikirhane tek bir model kullanır:
+ * dosyada birden çok model varsa ve "pick" verilmediyse seçenekler döner ({ choose }), hiçbir şey yazılmaz.
+ * Şifreleme anahtarı yanlışsa da hiçbir şey yazılmaz.
+ */
+export function importSettings({ data, pass, pick } = {}) {
+  let d = data;
+  if (typeof d === 'string') { try { d = JSON.parse(d); } catch { throw fail('bad-file'); } }
+  if (!d || d.app !== 'atolye' || d.type !== 'yerel-llm' || !Array.isArray(d.models)) throw fail('bad-file');
+  const models = d.models.slice(0, 50).filter((m) => m && llm.validUrl(m.url) && String(m.model || '').trim());
+  if (!models.length) throw fail('bad-file');
+  if (models.some((m) => m.key) && !String(pass || '')) throw fail('need-pass');
+  let key = null;
+  const open = (k) => {
+    try {
+      key ||= passKey(pass, Buffer.from(String(d.salt || ''), 'base64'));
+      const dc = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(String(k.iv), 'base64'));
+      dc.setAuthTag(Buffer.from(String(k.tag), 'base64'));
+      return Buffer.concat([dc.update(Buffer.from(String(k.data), 'base64')), dc.final()]).toString('utf8');
+    } catch { throw fail('bad-pass'); }
+  };
+  const keys = models.map((m) => (m.key ? open(m.key) : '')); // bütün anahtarlar çözülür: yanlış anahtar seçimden önce anlaşılır
+  const text = (v, n) => String(v || '').replace(/\s+/g, ' ').trim().slice(0, n);
+  if (models.length > 1 && (pick === undefined || pick === null || pick === '')) {
+    return { choose: models.map((m, i) => ({ i, name: text(m.name, 40) || text(m.model, 120), url: llm.base(m.url), model: text(m.model, 120), kind: m.kind === 'anthropic' ? 'anthropic' : 'openai' })) };
+  }
+  const i = models.length > 1 ? Number(pick) : 0;
+  const m = models[i];
+  if (!m) throw fail('not-found');
+  const old = settings();
+  const url = llm.base(m.url);
+  // Embedding modeli dosyada yoksa (Atölye dosyası) ve sunucu aynıysa var olan korunur
+  writeJson(settingsFile(), { url, chatModel: text(m.model, 120), embedModel: text(m.embedModel, 120) || (old.url === url ? old.embedModel : ''), key: keys[i] });
+  // Atölye'de Anthropic uyumlu diye kayıtlı sunucu OpenAI uç noktasını da sunuyor olabilir (Ollama gibi) ya da olmayabilir
+  return { settings: publicSettings(), model: text(m.model, 120), anthropic: m.kind === 'anthropic' };
 }
 
 // ---------- Belgeler ----------

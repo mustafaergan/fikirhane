@@ -26,6 +26,10 @@ const MESSAGES = {
   'busy': 'Bu belgede zaten bir işlem sürüyor.',
   'empty': 'Bir şey yazın.',
   'too-large': 'Dosya çok büyük (en fazla 300 MB).',
+  'nothing-to-export': 'Dışa aktarılacak yerel model ayarı yok. Önce sunucu adresini ve sohbet modelini kaydedin.',
+  'bad-file': 'Bu dosya bir Fikirhane ya da Atölye yerel model dosyası değil ya da bozuk.',
+  'need-pass': 'Dosyada şifreli API anahtarı var; şifreleme anahtarını yazın.',
+  'bad-pass': 'Şifreleme anahtarı yanlış; dosyadaki API anahtarı çözülemedi. Hiçbir şey değiştirilmedi.',
   'bad-site': 'Geçerli bir site adresi girin (ör. https://uygulama.example.com).',
   'no-browser': 'Bu bilgisayarda Microsoft Edge ya da Google Chrome bulunamadı.',
   'browser-failed': 'Tarayıcı başlatılamadı.',
@@ -53,6 +57,8 @@ export function createServer({ port = 3310, host = '127.0.0.1' } = {}) {
   const routes = [
     ['GET', /^\/api\/config$/, async () => ({ app: 'fikirhane', version, settings: lib.publicSettings(), home: lib.home() })],
     ['POST', /^\/api\/settings$/, async (_m, body) => ({ ok: true, settings: lib.saveSettings(body) })],
+    ['POST', /^\/api\/settings\/export$/, async (_m, body) => { const file = lib.exportSettings(body); console.log('[ayarlar] yerel model ayarı dışa aktarıldı'); return { ok: true, file }; }],
+    ['POST', /^\/api\/settings\/import$/, async (_m, body) => { const r = lib.importSettings(body); if (r.settings) console.log('[ayarlar] yerel model ayarı içe aktarıldı'); return { ok: true, ...r }; }],
     ['POST', /^\/api\/settings\/test$/, async (_m, body) => {
       const cur = lib.settings();
       const cfg = { url: body.url || cur.url, key: body.key || cur.key };
