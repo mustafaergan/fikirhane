@@ -16,7 +16,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { extractPages, makeChunks, makeSections, extOf, SUPPORTED } from './text.js';
 import { buildIndex, bm25, cosineTop, fuse, tokens, fold } from './search.js';
-import { normalizeSteps, scenarioText, scenarioScript, scenarioVars, statusText, judgeRun, fileName, MAX_SCENARIOS } from './senaryo.js';
+import { normalizeSteps, scenarioText, scenarioScript, scenarioVars, statusText, judgeRun, cardDiff, fileName, MAX_SCENARIOS } from './senaryo.js';
 import { cardText, cardChunks, commonLinks, screenGuide, routeTo } from './gezgin.js';
 import * as llm from './llm.js';
 
@@ -235,7 +235,7 @@ export function getDocument(id) {
   if (!meta) throw fail('not-found');
   let map = '';
   try { map = fs.readFileSync(path.join(dirOf(id), 'harita.md'), 'utf8'); } catch { /* henüz yok */ }
-  const list = meta.kind === 'site' ? part(id, 'ekranlar.json', []).map((c) => ({ no: c.no, title: c.title, path: c.path, from: c.from, via: c.via, fields: c.fields.length, buttons: c.buttons.length, links: c.links.length, changed: Boolean(c.changed) })) : undefined;
+  const list = meta.kind === 'site' ? part(id, 'ekranlar.json', []).map((c) => ({ no: c.no, title: c.title, path: c.path, from: c.from, via: c.via, fields: c.fields.length, buttons: c.buttons.length, links: c.links.length, changed: Boolean(c.changed), mark: c.mark || '' })) : undefined;
   return { meta, map, notes: part(id, 'notlar.json', []), questions: part(id, 'sorular.json', []), comments: part(id, 'yorumlar.json', []), screens: list,
     scenarios: meta.kind === 'site' ? scenarios(id).map((x) => ({ ...scenInfo(x), text: scenarioText(x) })) : undefined, job: jobs.get(id) || null };
 }
@@ -268,9 +268,14 @@ export function removeComment(id, commentId) {
   writeJson(path.join(dirOf(id), 'yorumlar.json'), list);
   return list;
 }
-export function saveMap(id, text) {
-  if (!metaOf(id)) throw fail('not-found');
-  fs.writeFileSync(path.join(dirOf(id), 'harita.md'), String(text || '').slice(0, 60_000));
+export function saveMap(id, text, byUser = true) {
+  const meta = metaOf(id);
+  if (!meta) throw fail('not-found');
+  const file = path.join(dirOf(id), 'harita.md');
+  // Yerel model haritayı yeniden yazarken kullanıcının elle düzelttiği harita silinmez: harita-onceki.md olarak kalır
+  if (!byUser && meta.mapEdited && fs.existsSync(file)) fs.copyFileSync(file, path.join(dirOf(id), 'harita-onceki.md'));
+  fs.writeFileSync(file, String(text || '').slice(0, 60_000));
+  if (Boolean(meta.mapEdited) !== byUser) { meta.mapEdited = byUser; saveMeta(meta); }
 }
 export function setApproved(id, approved) {
   const meta = metaOf(id);
@@ -367,7 +372,7 @@ export function understand(id) {
       for (const g of groups) { if (job.state !== 'running') return; pieces.push(await ask(PROMPT.group, g, job.controller.signal, 1000)); }
     }
     const map = await ask(P.map, `${site ? 'Uygulama' : 'Belge'}: ${meta.name} (${meta.pages} ${site ? 'ekran' : 'sayfa'})\n\n${pieces.join('\n\n').slice(0, 16_000)}`, job.controller.signal, 1400);
-    saveMap(id, map);
+    saveMap(id, map, false);
     job.done++;
     const old = part(id, 'sorular.json', []);
     if (!old.length) {
@@ -475,7 +480,7 @@ export function siteOverview(id) {
     `# ${siteLine(meta)}`,
     full.map && `## Harita\n${full.map.slice(0, 4000)}`,
     notes.length && `## Kullanıcının notları (ekran kartlarıyla çelişirse bunlar esas alınır)\n${notes.map((n) => `- ${n}`).join('\n').slice(0, 3000)}`,
-    `## Ekranlar\n${cards.map((c) => `${c.no}. ${c.title} — ${c.path}${c.changed ? ' (değişmiş görünüyor)' : ''}`).join('\n')}`,
+    `## Ekranlar\n${cards.map((c) => `${c.no}. ${c.title} — ${c.path}${c.changed ? ' (değişmiş görünüyor)' : ''}${c.mark === 'görülmedi' ? ' (son gezintide görülmedi)' : ''}`).join('\n')}`,
     scenarios(id).length && `## Senaryolar (kayıtlı, yeniden çalıştırılabilir)\n${scenarios(id).map(scenLine).join('\n')}`,
   ].filter(Boolean).join('\n\n');
   return { site: siteInfo(meta), map: full.map, notes, screens: cards.map((c) => ({ no: c.no, title: c.title, path: c.path, url: c.url, dialog: c.dialog, from: c.from, via: c.via, iz: c.iz, changed: Boolean(c.changed) })), scenarios: scenarios(id).map(scenInfo), text };
@@ -527,8 +532,8 @@ export async function siteFind(q, id) {
 // Playwright betiğine çevirir. Betiği Fikirhane çalıştırmaz; çalıştıran sonucu bildirir (bkz. senaryo.js).
 const scenFile = (id) => path.join(dirOf(id), 'senaryolar.json');
 const scenarios = (id) => part(id, 'senaryolar.json', []).filter((x) => x && x.id && Array.isArray(x.steps));
-const scenInfo = (x) => ({ id: x.id, name: x.name, description: x.description || '', steps: x.steps.length, status: x.status || 'denenmedi', updated: x.updated, last: x.runs?.[0] || null, vars: scenarioVars(x.steps) });
-const scenLine = (x) => `- [${x.id}] ${x.name} (${x.steps.length} adım) — ${statusText(x)}`;
+const scenInfo = (x) => ({ id: x.id, name: x.name, description: x.description || '', steps: x.steps.length, status: x.status || 'denenmedi', updated: x.updated, last: x.runs?.[0] || null, warn: x.warn || '', vars: scenarioVars(x.steps) });
+const scenLine = (x) => `- [${x.id}] ${x.name} (${x.steps.length} adım) — ${statusText(x)}${x.warn ? ' (uyarı: seçicileri eskimiş olabilir)' : ''}`;
 
 export function listScenarios(id) {
   site(id);
@@ -553,7 +558,7 @@ export function saveScenario(id, { id: sid, name, description, steps } = {}) {
   if (sid && !x) throw fail('not-found');
   if (x) {
     // Adımlar değiştiyse eski sonuç artık bu senaryoyu anlatmaz
-    if (JSON.stringify(x.steps) !== JSON.stringify(clean)) x.status = 'denenmedi';
+    if (JSON.stringify(x.steps) !== JSON.stringify(clean)) { x.status = 'denenmedi'; delete x.warn; }
     Object.assign(x, { name: title, description: line(description, 300), steps: clean, updated: now });
   } else {
     if (all.length >= MAX_SCENARIOS) throw fail('too-many-scenarios');
@@ -604,6 +609,7 @@ export function recordRun(id, sid, result) {
   const { run, changed, text } = judgeRun(x, result, { origin: meta.origin, cards });
   x.runs = [run, ...(x.runs || [])].slice(0, 10);
   x.status = run.ok ? 'geçti' : 'kaldı';
+  if (run.ok) delete x.warn; // çalışan senaryonun seçicileri geçerlidir
   writeJson(scenFile(id), all);
   if (changed) {
     const card = cards.find((c) => c.no === changed.no);
@@ -611,4 +617,101 @@ export function recordRun(id, sid, result) {
     writeJson(path.join(dirOf(id), 'ekranlar.json'), cards);
   }
   return { status: x.status, changed: changed ? changed.no : null, text };
+}
+
+// ---------- Siteyi yeniden gezme: var olan kaydı güncelleme ----------
+// Arayüz değişince site yeniden gezilir. Yeni belge açmak yerine var olan kayıt güncellenir: ekran numaraları yerinde
+// kalır (notlar, harita ve yanıtlardaki "s.N" göndermeleri bozulmaz), kullanıcının notları, yanıtları ve senaryolar
+// korunur. Yeni gezinti sitenin yalnızca bir bölümünü kapsayabilir; o yüzden görülmeyen ekranlar silinmez, işaretlenir.
+export const sitesAt = (origin) => listDocs().filter((d) => d.kind === 'site' && d.origin === origin).map((d) => ({ id: d.id, name: d.name, screens: d.pages }));
+
+/** Kartlar değişince belgeyi yeniden kurar: sayfalar ve parçalar yazılır; metni değişen bölümlerin notları düşer */
+function rebuildSite(meta, cards) {
+  const id = meta.id;
+  const before = makeSections(part(id, 'sayfalar.json', []));
+  const common = commonLinks(cards);
+  const pages = cards.map((c) => ({ page: c.no, text: cardText(c, cards, common) }));
+  const chunks = cardChunks(cards);
+  const sections = makeSections(pages);
+  const oldNotes = part(id, 'notlar.json', []);
+  // Bir bölümün notu, o bölümün metni aynı kaldıysa geçerlidir; değiştiyse yerel model o bölümü yeniden okur
+  const notes = oldNotes.filter((n) => sections[n.i] && before[n.i] && sections[n.i].text === before[n.i].text);
+  writeJson(path.join(dirOf(id), 'ekranlar.json'), cards);
+  writeJson(path.join(dirOf(id), 'sayfalar.json'), pages);
+  writeJson(path.join(dirOf(id), 'parcalar.json'), chunks);
+  if (oldNotes.length) writeJson(path.join(dirOf(id), 'notlar.json'), notes);
+  fs.rmSync(path.join(dirOf(id), 'vektorler.bin'), { force: true }); // parçalar değişti: anlamsal dizin yeniden oluşturulmalı
+  indexCache.delete(id);
+  const whole = notes.length >= sections.length && fs.existsSync(path.join(dirOf(id), 'harita.md'));
+  Object.assign(meta, { pages: pages.length, chars: pages.reduce((n, p) => n + p.text.length, 0), chunks: chunks.length, sections: sections.length, understood: notes.length,
+    embedDim: 0, state: whole ? 'anlamlandırıldı' : 'dizinlendi' });
+  delete meta.embedModel;
+  saveMeta(meta);
+  return { droppedNotes: oldNotes.length - notes.length };
+}
+
+/**
+ * Yeni gezintinin kartlarını var olan siteye işler. Aynı adres kalıbındaki ekranlar eşleştirilir (önce yapısı aynı
+ * olanlar, sonra en az farkla); eşleşen ekran eski numarasını korur. Kartlara işaret konur: "yeni", "değişti",
+ * "görülmedi". Seçicisi ekranlardan kaybolan senaryolar uyarılır. Bir şey değiştiyse onay geri alınır.
+ */
+export function updateSite(id, { origin, cards: fresh } = {}) {
+  const { meta, cards: old } = site(id);
+  if (meta.origin !== origin) throw fail('other-site');
+  if (!fresh?.length) throw fail('no-screens');
+  const now = new Date().toISOString();
+  const key = (c) => `${c.pattern}|${c.dialog ? 'pencere' : 'sayfa'}`;
+  const size = (o, n) => { const d = cardDiff(o, n); return d.added.length + d.removed.length; };
+  const pairs = [];
+  for (const n of fresh) for (const o of old) if (key(n) === key(o)) pairs.push({ n, o, score: n.iz === o.iz ? -1 : size(o, n) + (n.dialog !== o.dialog ? 1000 : 0) });
+  pairs.sort((a, b) => a.score - b.score);
+  const match = new Map(); // yeni kart → eski kart
+  const taken = new Set();
+  for (const p of pairs) { if (match.has(p.n) || taken.has(p.o)) continue; match.set(p.n, p.o); taken.add(p.o); }
+  let next = Math.max(0, ...old.map((c) => c.no));
+  const no = new Map(fresh.map((n) => [n.no, match.get(n)?.no ?? ++next])); // gezintideki numara → kayıttaki numara
+  const merged = fresh.map((n) => {
+    const o = match.get(n);
+    const { changed: _c, ...card } = n;
+    // Yeni gezintide bu ekrana bir tıklamayla gelindiyse o yol; adresle açıldıysa eskiden bilinen yol korunur
+    const route = n.from ? { from: no.get(n.from) ?? null, step: n.step || null, via: n.via || '' } : { from: o?.from ?? null, step: o?.step ?? null, via: o?.via || '' };
+    return { ...card, ...route, no: no.get(n.no), mark: !o ? 'yeni' : o.iz !== n.iz ? 'değişti' : '', seen: now };
+  });
+  const unseen = old.filter((o) => !taken.has(o)).map((o) => ({ ...o, mark: 'görülmedi' }));
+  const all = [...merged, ...unseen].sort((a, b) => a.no - b.no);
+
+  // Senaryolar: kartlarda eskiden bulunan ama artık hiçbir ekranda olmayan seçici, senaryonun eskidiğini gösterir
+  const locators = (list) => new Set(list.flatMap((c) => [...c.fields, ...c.buttons, ...c.links].map((e) => e.locator)).filter(Boolean));
+  const was = locators(old);
+  const is = locators(all);
+  const bare = (l) => l.replace(/\.(first|last)\(\)$|\.nth\(\d+\)$/, '');
+  const scens = scenarios(id);
+  let warned = 0;
+  for (const x of scens) {
+    const lost = x.steps.map((s, i) => (s.locator && was.has(bare(s.locator)) && !is.has(bare(s.locator)) ? i + 1 : 0)).filter(Boolean);
+    if (lost.length) { x.status = 'denenmedi'; x.warn = `Son gezintide ${lost.map((i) => `${i}.`).join(', ')} adımın seçicisi hiçbir ekranda bulunamadı; senaryo güncellenmeli.`; warned++; } else delete x.warn;
+  }
+  if (scens.length) writeJson(scenFile(id), scens);
+
+  const count = { added: merged.filter((c) => c.mark === 'yeni').length, revised: merged.filter((c) => c.mark === 'değişti').length, same: merged.filter((c) => !c.mark).length, unseen: unseen.length };
+  const wasApproved = meta.approved;
+  if (count.added || count.revised) meta.approved = false; // onay, o günkü ekranlar içindi
+  Object.assign(meta, { updated: now, revision: (meta.revision || 1) + 1 });
+  const { droppedNotes } = rebuildSite(meta, all);
+  const text = [`Güncellendi: ${count.added} yeni ekran, ${count.revised} ekran değişti, ${count.same} ekran aynı${count.unseen ? `, ${count.unseen} ekran bu gezintide görülmedi (silinmedi)` : ''}.`,
+    droppedNotes > 0 && `${droppedNotes} bölümün notu eskidi; "Anlamlandırmaya devam et" ile yenilenir.`,
+    warned > 0 && `${warned} senaryonun seçicileri eskimiş görünüyor (Senaryolar sekmesinde işaretli).`,
+    wasApproved && !meta.approved && 'Ekranlar değiştiği için onay geri alındı.'].filter(Boolean).join(' ');
+  return { meta, ...count, droppedNotes, warned, text };
+}
+
+/** Son gezintide görülmeyen ekranları kayıttan siler (numaralar yeniden verilmez; boşluk kalır) */
+export function pruneScreens(id) {
+  const { meta, cards } = site(id);
+  const gone = cards.filter((c) => c.mark === 'görülmedi').map((c) => c.no);
+  if (!gone.length) return { meta, removed: 0 };
+  const keep = cards.filter((c) => c.mark !== 'görülmedi').map((c) => (gone.includes(c.from) ? { ...c, from: null, step: null, via: '' } : c));
+  if (!keep.length) throw fail('no-screens');
+  rebuildSite(meta, keep);
+  return { meta, removed: gone.length };
 }

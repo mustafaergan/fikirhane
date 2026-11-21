@@ -51,6 +51,21 @@ kısa bir `text` bulunur:
 Sorguyla yönlenen eski tip uygulamalarda (`index.php?action=liste`) `action`, `page`, `view`, `tab`, `sayfa`, `islem`
 gibi anahtarların kelime değerleri ekranı belirler; kimlikler `{id}` olur; diğer sorgu değerleri (arama metni vb.) atılır.
 
+### Siteyi yeniden gezme
+
+Arayüz değişince site yeniden gezilir: site belgesindeki **Yeniden gez** gezintiyi aynı adresle açar, bitirirken
+**Var olanı güncelle** yeni belge açmak yerine kaydı günceller.
+
+- Aynı ekranlar eski numaralarını korur; böylece notlardaki, haritadaki ve yanıtlardaki `s.N` göndermeleri bozulmaz.
+  Kartlar işaretlenir: **yeni**, **değişti**, **son gezintide görülmedi**.
+- Notlarınız, sorulara verdiğiniz yanıtlar, harita ve senaryolar korunur. Yalnızca metni değişen bölümlerin notları
+  düşer; "Anlamlandırmaya devam et" yalnızca o bölümleri yeniden okutur. Yerel model haritayı yeniden yazarken elle
+  düzelttiğiniz harita `harita-onceki.md` olarak saklanır.
+- Yeni gezinti sitenin yalnızca bir bölümünü kapsayabilir; bu yüzden görülmeyen ekranlar silinmez. Gerçekten
+  kaldırıldılarsa "Ekranlar" sekmesindeki düğmeyle silersiniz.
+- Seçicisi artık hiçbir ekranda bulunmayan senaryolar çalıştırılmadan uyarılır. Ekranlar değiştiyse onay geri alınır.
+- Anlamsal dizin (embedding) parçalar değiştiği için yeniden oluşturulmalıdır.
+
 ### Senaryolar
 
 Senaryo, gezilmiş bir sitede adım adım yapılan bir işin ("yeni üye ekle") saklanan tarifidir. Bir kez yazılır, sonra
@@ -159,7 +174,7 @@ düz metin durur ve arayüze geri gönderilmez.
 - Anlamlandırma süresi yerel modelin hızına bağlıdır: 200 sayfalık bir belge onlarca model çağrısı demektir.
 - Notlar ve yanıtlar modelin çıkarımıdır; hatalı olabilir. Önemli kararlarda kaynak sayfayı açın.
 - Site gezmede iç çerçeveler (iframe) ve kapalı gölge ağaçları okunmaz; erişilebilir adı olmayan düğmeler yalnızca
-  sayılır. Arayüz değişince kartlar eskir: site yeniden gezilmelidir (eski kayıt güncellenmez, yeni belge oluşur).
+  sayılır. Arayüz değişince kartlar eskir: site yeniden gezilmelidir ("Yeniden gez" var olan kaydı günceller).
 - Atölye ile bağlantı henüz yoktur; önce Fikirhane kendi başına olgunlaştırılıyor.
 
 optona.tr tarafından yazılmıştır. MIT lisansı.

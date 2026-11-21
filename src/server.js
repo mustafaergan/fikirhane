@@ -45,6 +45,7 @@ const MESSAGES = {
   'bad-locator': 'Seçici anlaşılamadı. Örnek: getByRole(\'button\', { name: \'Kaydet\' })',
   'secret-literal': 'Parola alanına sabit değer yazılamaz (senaryo dosyada açık durur). Değer yerine {{parola}} gibi bir değişken kullanın; çalıştırırken FIKIRHANE_VAR_PAROLA ile verilir.',
   'no-route': 'Bu ekrana gidiş yolundaki bir tıklamanın seçicisi bilinmiyor; senaryo üretilemedi.',
+  'other-site': 'Güncellenecek kayıt bu siteye ait değil.',
   'no-screens': 'Henüz hiç ekran kaydedilmedi. Açılan tarayıcıda siteyi gezin.',
 };
 const errorText = (err) => MESSAGES[err.code] ? `${MESSAGES[err.code]}${err.detail && err.code !== 'no-text' ? ` (${err.detail})` : ''}` : (err.detail || err.message);
@@ -63,6 +64,8 @@ export function createServer({ port = 3310, host = '127.0.0.1' } = {}) {
   const version = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
   const send = (res, code, data) => { const body = JSON.stringify(data); res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(body); };
 
+  // Süren gezinti: aynı site daha önce gezildiyse kayıtları da verilir (bitirirken "var olanı güncelle" seçeneği için)
+  const tourView = () => { const t = gezgin.tourStatus(); return t ? { ...t, existing: lib.sitesAt(t.origin) } : null; };
   const routes = [
     ['GET', /^\/api\/config$/, async () => ({ app: 'fikirhane', version, settings: lib.publicSettings(), atolye: lib.atolyeList(), home: lib.home() })],
     ['POST', /^\/api\/settings$/, async (_m, body) => ({ ok: true, settings: lib.saveSettings(body) })],
@@ -108,12 +111,22 @@ export function createServer({ port = 3310, host = '127.0.0.1' } = {}) {
     ['DELETE', /^\/api\/sites\/([\w-]+)\/scenarios\/([\w-]+)$/, async (m) => { lib.removeScenario(m[1], m[2]); return { ok: true }; }],
     ['GET', /^\/api\/sites\/([\w-]+)\/scenarios\/([\w-]+)\/script$/, async (m, _b, _u, req) => lib.scriptOf(m[1], m[2], { base: `http://${req.headers.host}`, version })],
     ['POST', /^\/api\/sites\/([\w-]+)\/scenarios\/([\w-]+)\/result$/, async (m, body) => { const r = lib.recordRun(m[1], m[2], body); console.log(`[senaryo] ${m[2]}: ${r.status}${r.changed ? `, Ekran ${r.changed} değişmiş` : ''}`); return { ok: true, ...r }; }],
-    ['GET', /^\/api\/tour$/, async () => ({ tour: gezgin.tourStatus(), browser: Boolean(gezgin.findBrowser()) })],
-    ['POST', /^\/api\/tour$/, async (_m, body) => { await gezgin.startTour({ url: body.url }); console.log('[gezinti] başladı'); return { ok: true, tour: gezgin.tourStatus() }; }],
-    ['POST', /^\/api\/tour\/capture$/, async () => ({ ok: true, ...await gezgin.captureNow(), tour: gezgin.tourStatus() })],
-    ['POST', /^\/api\/tour\/crawl$/, async (_m, body) => { gezgin.crawlTour({ limit: body.limit }); return { ok: true, tour: gezgin.tourStatus() }; }],
-    ['POST', /^\/api\/tour\/stop$/, async () => { gezgin.stopCrawl(); return { ok: true, tour: gezgin.tourStatus() }; }],
-    ['POST', /^\/api\/tour\/finish$/, async () => { const meta = lib.addSite(await gezgin.finishTour()); console.log(`[gezinti] bitti: ${meta.pages} ekran, ${meta.chunks} parça`); return { ok: true, meta }; }],
+    ['GET', /^\/api\/tour$/, async () => ({ tour: tourView(), browser: Boolean(gezgin.findBrowser()) })],
+    ['POST', /^\/api\/tour$/, async (_m, body) => { await gezgin.startTour({ url: body.url }); console.log('[gezinti] başladı'); return { ok: true, tour: tourView() }; }],
+    ['POST', /^\/api\/tour\/capture$/, async () => ({ ok: true, ...await gezgin.captureNow(), tour: tourView() })],
+    ['POST', /^\/api\/tour\/crawl$/, async (_m, body) => { gezgin.crawlTour({ limit: body.limit }); return { ok: true, tour: tourView() }; }],
+    ['POST', /^\/api\/tour\/stop$/, async () => { gezgin.stopCrawl(); return { ok: true, tour: tourView() }; }],
+    ['POST', /^\/api\/tour\/finish$/, async (_m, body) => {
+      // Güncellenecek kayıt tarayıcı kapanmadan önce denetlenir: hata olursa kaydedilen ekranlar kaybolmaz
+      const t = gezgin.tourStatus();
+      if (body.update && t && !lib.sitesAt(t.origin).some((x) => x.id === body.update)) throw Object.assign(new Error('other-site'), { code: 'other-site' });
+      const done = await gezgin.finishTour();
+      if (body.update) { const r = lib.updateSite(body.update, done); console.log(`[gezinti] kayıt güncellendi: ${r.added} yeni, ${r.revised} değişen, ${r.unseen} görülmeyen ekran`); return { ok: true, updated: true, meta: r.meta, text: r.text }; }
+      const meta = lib.addSite(done);
+      console.log(`[gezinti] bitti: ${meta.pages} ekran, ${meta.chunks} parça`);
+      return { ok: true, meta };
+    }],
+    ['POST', /^\/api\/docs\/([\w-]+)\/screens\/prune$/, async (m) => ({ ok: true, ...lib.pruneScreens(m[1]) })],
     ['POST', /^\/api\/tour\/cancel$/, async () => { await gezgin.cancelTour(); return { ok: true }; }],
     ['GET', /^\/api\/update$/, async (_m, _b, url) => checkUpdate({ force: url.searchParams.get('refresh') === '1' })],
     ['POST', /^\/api\/update\/apply$/, async () => applyUpdate()],

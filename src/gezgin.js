@@ -263,6 +263,7 @@ export function cardLines(c, cards = [], common = commonLinks(cards)) {
     c.rowActions.length && `Satır işlemleri: ${c.rowActions.join('; ')}`,
     c.rowLinks.length && `Satır bağlantıları: ${c.rowLinks.map((r) => `${r.pattern} (${r.n} adet)`).join('; ')}`,
     c.external > 0 && `Dış bağlantılar: ${c.external}`,
+    c.mark === 'görülmedi' && 'Not: bu ekran son gezintide görülmedi; kaldırılmış ya da o gezintide açılmamış olabilir.',
   ].filter(Boolean);
 }
 export const cardText = (c, cards, common) => cardLines(c, cards, common).join('\n');

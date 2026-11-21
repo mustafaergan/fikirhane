@@ -196,6 +196,7 @@ export function scenarioText(scn) {
   return [
     `Senaryo [${scn.id}]: ${scn.name} — ${statusText(scn)}`,
     scn.description,
+    scn.warn && `Uyarı: ${scn.warn}`,
     ...scn.steps.map((s, i) => `${i + 1}. ${stepLabel(s)}${s.note ? ` — ${s.note}` : ''}`),
     vars.length && `Değişkenler: ${vars.map((v) => `{{${v}}}`).join(', ')} (çalıştırırken FIKIRHANE_VAR_${vars[0].toUpperCase()}=… biçiminde verilir)`,
   ].filter(Boolean).join('\n');

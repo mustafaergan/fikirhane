@@ -140,6 +140,7 @@ function renderDoc() {
       el('span', { class: `badge${meta.approved ? ' ok' : meta.state === 'anlamlandırıldı' ? ' warn' : ''}`, text: meta.approved ? 'Onaylandı' : meta.state === 'anlamlandırıldı' ? 'Onayınızı bekliyor' : 'Aranabilir' }),
       meta.embedDim ? el('span', { class: 'badge ok', text: 'Anlamsal dizin var' }) : null),
     state.notice && el('div', { class: 'result err', text: state.notice }),
+    state.info && el('div', { class: 'result ok', text: state.info }),
     job?.state === 'error' && el('div', { class: 'result err', text: `İşlem durdu: ${job.error}` }),
     running && [el('div', { class: 'progress' }, el('div', { style: `width:${Math.round((job.done / Math.max(1, job.total)) * 100)}%` })),
       el('div', { class: 'progress-text', text: `${job.kind}: ${job.done}/${job.total}. Yerel modelin hızına göre sürer; sayfayı kapatabilirsiniz, iş arka planda devam eder.` })],
@@ -149,12 +150,14 @@ function renderDoc() {
           ? el('button', { class: 'btn primary', type: 'button', disabled: !llmReady, title: llmReady ? null : 'Önce Ayarlar\'dan yerel modeli tanımlayın', text: meta.understood ? 'Anlamlandırmaya devam et' : 'Anlamlandır', onclick: () => act(`/api/docs/${meta.id}/understand`) })
           : el('button', { class: `btn${meta.approved ? '' : ' primary'}`, type: 'button', text: meta.approved ? 'Onayı geri al' : 'Onayla', title: 'Haritayı ve notları okudum; sorular buna göre yanıtlansın', onclick: () => act(`/api/docs/${meta.id}/approve`, { approved: !meta.approved }) }),
         !meta.embedDim && state.config?.settings?.embedModel ? el('button', { class: 'btn', type: 'button', text: 'Anlamsal dizin oluştur', title: 'Kelimesi geçmese de anlamca yakın bölümleri bulur', onclick: () => act(`/api/docs/${meta.id}/embed`) }) : null],
+      meta.kind === 'site' && el('button', { class: 'btn', type: 'button', text: 'Yeniden gez', title: 'Arayüz değiştiyse siteyi yeniden gezin; bitirirken "Var olanı güncelle" bu kaydı günceller (notlarınız ve senaryolar korunur)', onclick: () => openTour(meta.start || meta.origin) }),
       el('span', { class: 'spacer' }),
       (() => { const b = el('button', { class: 'btn ghost', type: 'button', text: 'Belgeyi sil' }); b.onclick = async () => { if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = 'Emin misiniz?'; b.classList.add('danger'); return; } await api(`/api/docs/${meta.id}`, null, 'DELETE'); state.current = null; state.doc = null; await loadDocs(); render(); }; return b; })()),
     !llmReady && el('p', { style: 'margin:10px 0 0', text: 'Anlamlandırma ve soru yanıtlama için yerel model gerekir. Ayarlar\'dan (sol üstteki dişli) sunucu adresini ve modeli girin. Model olmadan da "Yalnızca ara" ile belgede arama yapabilirsiniz.' }));
   state.notice = null;
+  state.info = null;
 
-  const TABS = [...(meta.kind === 'site' ? [['ekranlar', `Ekranlar (${state.doc.screens?.length || 0})`], ['senaryolar', `Senaryolar (${state.doc.scenarios?.length || 0})`]] : []), ['harita', 'Harita'], ['notlar', `Bölüm notları (${notes.length})`], ['sorular', `Sorular (${answered}/${questions.length})`], ['yorumlar', `Notlarım (${comments.length})`]];
+  const TABS =[...(meta.kind === 'site' ? [['ekranlar', `Ekranlar (${state.doc.screens?.length || 0})`], ['senaryolar', `Senaryolar (${state.doc.scenarios?.length || 0})`]] : []), ['harita', 'Harita'], ['notlar', `Bölüm notları (${notes.length})`], ['sorular', `Sorular (${answered}/${questions.length})`], ['yorumlar', `Notlarım (${comments.length})`]];
   const tabs = el('div', { class: 'tabs' }, TABS.map(([id, name]) => el('button', { type: 'button', class: `tab${state.tab === id ? ' on' : ''}`, text: name, onclick: () => { state.tab = id; render(); } })));
   content.replaceChildren(head, tabs, ...tabBody());
 }
@@ -162,8 +165,17 @@ function tabBody() {
   const { meta, map, notes, questions, comments } = state.doc;
   if (state.tab === 'ekranlar') {
     const list = state.doc.screens || [];
+    const unseen = list.filter((s) => s.mark === 'görülmedi').length;
+    const MARK = { yeni: ['ok', 'yeni', 'Son gezintide ilk kez görüldü'], 'değişti': ['warn', 'değişti', 'Son gezintide yapısı farklı çıktı; kart güncellendi'], 'görülmedi': ['', 'son gezintide görülmedi', 'Kaldırılmış ya da o gezintide açılmamış olabilir; kart olduğu gibi duruyor'] };
+    const prune = el('button', { class: 'btn', type: 'button', text: `Görülmeyen ${unseen} ekranı sil` });
+    prune.onclick = async () => {
+      if (!prune.dataset.sure) { prune.dataset.sure = '1'; prune.textContent = 'Emin misiniz?'; prune.classList.add('danger'); return; }
+      const r = await api(`/api/docs/${meta.id}/screens/prune`, {});
+      if (!r.ok) alertBox(r.error); else { await loadDocs(); await refreshDoc(); }
+    };
     return [
       el('p', { style: 'color:var(--text-2);font-size:13.5px;margin:0 0 10px', text: 'Gezinti sırasında kaydedilen ekranlar. Kartta ekranın yapısı durur: başlıklar, alanlar, düğmeler, bağlantılar. Alanlara yazılan değerler ve tablolardaki veriler kaydedilmez.' }),
+      unseen > 0 && el('div', { class: 'actions', style: 'margin-bottom:10px' }, el('span', { style: 'color:var(--text-2);font-size:13px;flex:1;min-width:220px', text: `${unseen} ekran son gezintide görülmedi. Kaldırıldıysa silebilirsiniz; o gezintide yalnızca açmadıysanız dokunmayın.` }), el('span', { class: 'spacer' }), prune),
       ...list.map((s) => el('div', { class: 'note' },
         el('div', { class: 'note-head' }, el('span', { text: `Ekran ${s.no}` }), el('span', { class: 's-path', text: s.path }),
           el('button', { type: 'button', text: 'Senaryo yap', title: 'Bu ekrana gidişi (gezintide kaydedilen yol) yeniden çalıştırılabilir bir senaryo olarak kaydeder', onclick: async () => {
@@ -171,9 +183,9 @@ function tabBody() {
             if (r.ok) { state.tab = 'senaryolar'; await refreshDoc(); } else alertBox(r.error);
           } }),
           el('button', { type: 'button', text: 'Kartı göster', onclick: () => showPage(meta.id, s.no, meta.name) })),
-        el('div', { style: 'font-weight:600' }, s.title, s.changed && el('span', { class: 'badge warn', style: 'margin-left:8px;font-weight:400', title: 'Bir senaryo bu ekranda kaldı ve ekran karttan farklı çıktı; site yeniden gezilmeli', text: 'değişmiş görünüyor' })),
+        el('div', { style: 'font-weight:600' }, s.title, MARK[s.mark] && el('span', { class: `badge ${MARK[s.mark][0]}`, style: 'margin-left:8px;font-weight:400', title: MARK[s.mark][2], text: MARK[s.mark][1] }), s.changed && el('span', { class: 'badge warn', style: 'margin-left:8px;font-weight:400', title: 'Bir senaryo bu ekranda kaldı ve ekran karttan farklı çıktı; site yeniden gezilmeli', text: 'değişmiş görünüyor' })),
         el('div', { class: 's-via', text: [s.from || s.via ? `Geliş: ${[s.from && `Ekran ${s.from}`, s.via].filter(Boolean).join(' → ')}` : '', `${s.fields} alan`, `${s.buttons} düğme`, `${s.links} bağlantı`].filter(Boolean).join(' · ') }))),
-    ];
+    ].filter(Boolean);
   }
   if (state.tab === 'senaryolar') {
     const list = state.doc.scenarios || [];
@@ -191,6 +203,7 @@ function tabBody() {
           el('div', { class: 'actions', style: 'margin-bottom:6px' }, el('b', { text: s.name }), el('span', { class: `badge ${kind}`, text: label }),
             s.last && el('span', { class: 's-via', text: `${new Date(s.last.at).toLocaleString('tr-TR')}${s.last.ok ? ` · ${(s.last.ms / 1000).toFixed(1)} sn` : ''}` })),
           s.description && el('div', { class: 's-via', text: s.description }),
+          s.warn && el('div', { class: 'result err', style: 'margin-top:6px', text: s.warn }),
           el('pre', { class: 'steps-text', text: s.text.split('\n').filter((l) => /^\d+\. |^Değişkenler:/.test(l)).join('\n') }),
           s.last && !s.last.ok && el('div', { class: 'result err', text: `Son çalıştırma ${s.last.step}. adımda kaldı: ${s.last.error || 'hata bildirilmedi'}` }),
           el('div', { class: 'actions' },
@@ -337,6 +350,15 @@ function renderTour() {
   const limit = el('input', { type: 'number', class: 'short', min: '1', max: '200', title: 'En fazla kaç yeni ekran' });
   limit.value = tour.limit;
   limit.oninput = () => { tour.limit = Number(limit.value) || 30; };
+  const old = t.existing?.[0];
+  const finish = async (update) => {
+    const r = await tourAct('/api/tour/finish', update ? { update } : {});
+    if (!r.ok) return;
+    $('#tourDialog').close();
+    await loadDocs();
+    await openDoc(r.meta.id);
+    if (r.text) { state.tab = 'ekranlar'; state.info = r.text; render(); }
+  };
   const cancel = el('button', { class: 'btn ghost', type: 'button', text: 'Vazgeç' });
   cancel.onclick = async () => {
     if (t.count && !cancel.dataset.sure) { cancel.dataset.sure = '1'; cancel.textContent = 'Ekranlar silinsin mi?'; cancel.classList.add('danger'); return; }
@@ -361,12 +383,12 @@ function renderTour() {
       crawling && el('button', { class: 'btn', type: 'button', text: 'Durdur', onclick: () => tourAct('/api/tour/stop') }),
       el('span', { class: 'spacer' }),
       cancel,
-      el('button', { class: 'btn primary', type: 'button', text: 'Bitir ve kaydet', disabled: !t.count, onclick: async () => {
-        const r = await tourAct('/api/tour/finish');
-        if (r.ok) { $('#tourDialog').close(); await loadDocs(); await openDoc(r.meta.id); }
-      } })));
+      // Bu site daha önce gezildiyse var olan kayıt güncellenir: ekran numaraları, notlar ve senaryolar korunur
+      old && el('button', { class: 'btn', type: 'button', text: 'Yeni belge olarak kaydet', disabled: !t.count, title: 'Var olan kayda dokunmadan ayrı bir belge oluşturur', onclick: () => finish() }),
+      el('button', { class: 'btn primary', type: 'button', text: old ? 'Var olanı güncelle' : 'Bitir ve kaydet', disabled: !t.count,
+        title: old ? `"${old.name}" kaydını günceller: ekran numaraları, notlarınız ve senaryolar korunur; bu gezintide görülmeyen ekranlar silinmez, işaretlenir` : null, onclick: () => finish(old?.id) })));
 }
-function openTour() { tour.note = null; $('#app').classList.remove('menu-open'); renderTour(); $('#tourDialog').showModal(); loadTour(); }
+function openTour(url) { tour.note = null; if (typeof url === 'string' && !tour.data) tour.url = url; $('#app').classList.remove('menu-open'); renderTour(); $('#tourDialog').showModal(); loadTour(); }
 $('#siteBtn').onclick = openTour;
 $('#tourClose').onclick = () => $('#tourDialog').close();
 

@@ -126,7 +126,7 @@ test('gidiş yolu ve seçicili ekran özeti: tıklama zinciri seçicilere çevri
 // ---------- Gerçek tarayıcıyla ----------
 const hits = [];
 const seen = [];
-let site; let llm; let app; let base; let siteUrl;
+let site; let llm; let app; let base; let siteUrl; let savedSite;
 const page = (title, body) => `<!doctype html><html lang="tr"><head><meta charset="utf-8"><title>${title}</title></head><body>
   <nav><a href="/">Ana sayfa</a> <a href="/urunler">Ürünler</a> <a href="/uyeler">Üyeler</a> <a href="/cikis">Çıkış</a> <a href="/rapor.pdf">Rapor</a> <a href="https://yardim.example.com/">Yardım</a></nav>${body}</body></html>`;
 const PAGES = {
@@ -212,6 +212,7 @@ test('site gezilir: ekranlar kart olur, tıklama "geliş" olarak yazılır, otom
   assert.deepEqual([fin.meta.kind, fin.meta.pages, fin.meta.state, fin.meta.name], ['site', 6, 'dizinlendi', new URL(siteUrl).host]);
   assert.equal((await call('/api/tour')).tour, null);
   const id = fin.meta.id;
+  savedSite = id;
   const { screens } = await call(`/api/docs/${id}/screens`);
   const products = screens.find((s) => s.path === '/urunler');
   assert.deepEqual(products.fields.map((f) => [f.name, f.type, f.locator]), [['Ürün adı', 'text', "getByLabel('Ürün adı')"], ['Kategori', 'select', "getByLabel('Kategori')"], ['Barkod', 'text', "getByPlaceholder('Barkod')"], ['p', 'password', 'locator(\'[name="p"]\')']]);
@@ -273,6 +274,26 @@ test('site gezilir: ekranlar kart olur, tıklama "geliş" olarak yazılır, otom
   assert.match(seen[0].system, /ekran kartlarını okuyorsun/);
   assert.match(seen[0].user, /^Uygulama: 127\.0\.0\.1:\d+\nEkranlar: 1–6\n\n\[s\.1\]\nEkran 1: Hoş geldiniz/);
   assert.match(seen[1].system, /web uygulamasının ekran notları/);
+});
+
+test('aynı site yeniden gezilince var olan kayıt güncellenir; yeni belge açılmaz', { skip: noBrowser }, async () => {
+  await call('/api/tour', { url: `${siteUrl}/uyeler` });
+  const t = await until(async () => { const x = await tour(); return x.count === 1 && x; }, 'ilk ekran');
+  assert.deepEqual(t.existing.map((s) => [s.id, s.screens]), [[savedSite, 6]], 'gezinti, sitenin zaten kayıtlı olduğunu bildirir');
+  assert.equal((await call('/api/tour/finish', { update: 'baska-kayit' })).code, 'other-site');
+  assert.equal((await tour()).count, 1, 'hatalı istekte gezinti ve ekranları yerinde kalır');
+  const fin = await call('/api/tour/finish', { update: savedSite });
+  assert.deepEqual([fin.ok, fin.updated, fin.meta.id, fin.meta.pages, fin.meta.revision], [true, true, savedSite, 6, 2], fin.error);
+  assert.match(fin.text, /^Güncellendi: 0 yeni ekran, 0 ekran değişti, 1 ekran aynı, 5 ekran bu gezintide görülmedi \(silinmedi\)\./);
+  assert.equal((await call('/api/docs')).docs.length, 1);
+  const doc = await call(`/api/docs/${savedSite}`);
+  assert.deepEqual(doc.screens.map((s) => [s.no, s.path, s.mark]).filter((s) => s[2] === ''), [[4, '/uyeler', '']], 'ekran eski numarasını korur');
+  assert.match(doc.map, /Ürün ve üye yönetimi/, 'harita yerinde kalır');
+  assert.deepEqual(doc.questions.map((q) => q.q), ['Testte hangi kullanıcı kullanılmalı?']);
+  // Görülmeyen ekranlar istenirse silinir
+  const pruned = await call(`/api/docs/${savedSite}/screens/prune`, {});
+  assert.deepEqual([pruned.removed, pruned.meta.pages], [5, 1]);
+  assert.deepEqual((await call(`/api/docs/${savedSite}`)).screens.map((s) => [s.no, s.from]), [[4, null]]);
 });
 
 test('tarayıcı penceresi kapanırsa kaydedilen ekranlar kaybolmaz; vazgeçince geçici profil silinir', { skip: noBrowser }, async () => {

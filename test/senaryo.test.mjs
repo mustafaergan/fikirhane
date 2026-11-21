@@ -244,3 +244,70 @@ test('bir ekrana gidiş, gezintide kaydedilen yoldan senaryo olarak üretilir', 
   assert.equal(out.code, 0, out.out + out.err);
   assert.equal(out.calls.length, 6);
 });
+
+test('site yeniden gezilince kayıt güncellenir: ekran numaraları, kullanıcının bilgisi ve senaryolar korunur', async () => {
+  const id = lib.addSite({ origin, start: `${origin}/`, cards }).id;
+  const dir = path.join(tmp, 'belgeler', id);
+  const metaFile = path.join(dir, 'meta.json');
+  // Önceki gezintiden biriken bilgi: bölüm notu, elle düzeltilmiş harita, kullanıcının notu, onay, iki senaryo
+  const note = [{ i: 0, from: 1, to: 4, note: '**Ekranlar:** Üyeler (s.2)' }];
+  fs.writeFileSync(path.join(dir, 'notlar.json'), JSON.stringify(note));
+  fs.writeFileSync(metaFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(metaFile, 'utf8')), understood: 1, state: 'anlamlandırıldı' }));
+  lib.saveMap(id, '# Elle düzeltilmiş harita');
+  lib.addComment(id, 'Testte silme işlemi yapılmaz.');
+  lib.setApproved(id, true);
+  const viaButton = lib.saveScenario(id, { name: 'Formu aç', steps: [{ do: 'goto', screen: 2 }, { do: 'click', locator: "getByRole('button', { name: 'Yeni üye' })" }] }).scenario.id;
+  const direct = lib.saveScenario(id, { name: 'Adı doldur', steps: [{ do: 'goto', screen: 3 }, { do: 'fill', locator: "getByLabel('Ad')", value: 'Ayşe' }] }).scenario.id;
+  lib.recordRun(id, direct, { ok: true, ms: 400 });
+
+  // Yeni gezinti: yalnızca üç ekran gezildi, numaraları farklı; "Yeni üye" düğmesi "Üye ekle" olmuş, Raporlar eklenmiş
+  const fresh = [
+    mk(1, null, null, { url: '/uyeler?q=ali', title: 'Üyeler', buttons: [{ name: 'Üye ekle', role: 'button', locator: "getByRole('button', { name: 'Üye ekle' })" }] }),
+    mk(2, 1, { role: 'button', name: 'Üye ekle', row: false }, FORM),
+    mk(3, 1, { role: 'link', name: 'Raporlar', row: false }, { url: '/raporlar', title: 'Raporlar' }),
+  ];
+  assert.throws(() => lib.updateSite(id, { origin: 'https://baska.example.com', cards: fresh }), { code: 'other-site' });
+  assert.throws(() => lib.updateSite(id, { origin, cards: [] }), { code: 'no-screens' });
+  const r = lib.updateSite(id, { origin, cards: fresh });
+  assert.deepEqual([r.added, r.revised, r.same, r.unseen, r.warned, r.droppedNotes], [1, 1, 1, 2, 1, 1]);
+  assert.equal(r.text, 'Güncellendi: 1 yeni ekran, 1 ekran değişti, 1 ekran aynı, 2 ekran bu gezintide görülmedi (silinmedi). 1 bölümün notu eskidi; "Anlamlandırmaya devam et" ile yenilenir. '
+    + '1 senaryonun seçicileri eskimiş görünüyor (Senaryolar sekmesinde işaretli). Ekranlar değiştiği için onay geri alındı.');
+  // Eşleşen ekranlar eski numarasını korur, yenisi sona eklenir; yollar kayıttaki numaralara çevrilir
+  assert.deepEqual(lib.screens(id).screens.map((c) => [c.no, c.title, c.mark, c.from, c.via]), [[1, 'Ana sayfa', 'görülmedi', null, ''], [2, 'Üyeler', 'değişti', 1, '"Üyeler" bağlantısı'],
+    [3, 'Yeni üye', '', 2, '"Üye ekle" düğmesi'], [4, 'Üyeler › Süzgeç', 'görülmedi', 2, '"Süz" düğmesi'], [5, 'Raporlar', 'yeni', 2, '"Raporlar" bağlantısı']]);
+  let doc = lib.getDocument(id);
+  assert.deepEqual([doc.meta.approved, doc.meta.revision, doc.meta.pages, doc.meta.understood, doc.meta.state], [false, 2, 5, 0, 'dizinlendi']);
+  assert.deepEqual([doc.map, doc.comments.map((c) => c.text), doc.notes], ['# Elle düzeltilmiş harita', ['Testte silme işlemi yapılmaz.'], []], 'harita ve kullanıcının notu korunur; eskiyen bölüm notu düşer');
+  assert.match(lib.pageText(id, 1).text, /\nNot: bu ekran son gezintide görülmedi; kaldırılmış ya da o gezintide açılmamış olabilir\.$/);
+  assert.match(lib.pageText(id, 2).text, /Düğmeler: Üye ekle/);
+  assert.equal((await lib.search('raporlar', [id]))[0].page, 5, 'yeni ekran aranabilir');
+  assert.match(lib.siteOverview(id).text, /\n1\. Ana sayfa — \/ \(son gezintide görülmedi\)\n2\. Üyeler — \/uyeler\?q=…\n/);
+  // Senaryolar: düğmesi kaybolan uyarılır ve "çalıştırılmadı" olur; diğeri sonucuyla birlikte durur
+  const [a, b] = [lib.getScenario(id, viaButton), lib.getScenario(id, direct)];
+  assert.deepEqual([a.scenario.status, a.scenario.warn], ['denenmedi', 'Son gezintide 2. adımın seçicisi hiçbir ekranda bulunamadı; senaryo güncellenmeli.']);
+  assert.match(a.text, /\nUyarı: Son gezintide 2\. adımın seçicisi/);
+  assert.deepEqual([b.scenario.status, b.scenario.warn, b.scenario.runs.length], ['geçti', undefined, 1]);
+  assert.match(lib.listScenarios(id).text, /Formu aç \(2 adım\) — henüz çalıştırılmadı \(uyarı: seçicileri eskimiş olabilir\)/);
+  // Senaryo düzeltilince uyarı kalkar
+  lib.saveScenario(id, { id: viaButton, name: 'Formu aç', steps: [{ do: 'goto', screen: 2 }, { do: 'click', locator: "getByRole('button', { name: 'Üye ekle' })" }] });
+  assert.equal(lib.getScenario(id, viaButton).scenario.warn, undefined);
+
+  // Aynı ekranlarla yeniden gezinti: hiçbir şey değişmez; yenilenen not ve onay yerinde kalır
+  fs.writeFileSync(path.join(dir, 'notlar.json'), JSON.stringify(note));
+  lib.setApproved(id, true);
+  const again = lib.updateSite(id, { origin, cards: fresh });
+  assert.deepEqual([again.added, again.revised, again.same, again.unseen, again.droppedNotes, again.warned], [0, 0, 3, 2, 0, 0]);
+  doc = lib.getDocument(id);
+  assert.deepEqual([doc.meta.approved, doc.meta.understood, doc.meta.state, doc.notes.length, doc.screens.map((s) => s.mark)], [true, 1, 'anlamlandırıldı', 1, ['görülmedi', '', '', 'görülmedi', '']]);
+
+  // Yerel model haritayı yeniden yazarken elle düzeltilmiş harita yedeklenir
+  lib.saveMap(id, '# Modelin yeni haritası', false);
+  assert.deepEqual([lib.getDocument(id).map, fs.readFileSync(path.join(dir, 'harita-onceki.md'), 'utf8')], ['# Modelin yeni haritası', '# Elle düzeltilmiş harita']);
+
+  // Görülmeyen ekranlar silinir: numaralar yeniden verilmez, silinen ekrana bağlı yol temizlenir
+  const pruned = await call(`/api/docs/${id}/screens/prune`, {});
+  assert.deepEqual([pruned.removed, pruned.meta.pages], [2, 3]);
+  assert.deepEqual(lib.screens(id).screens.map((c) => [c.no, c.from, c.via]), [[2, null, ''], [3, 2, '"Üye ekle" düğmesi'], [5, 2, '"Raporlar" bağlantısı']]);
+  assert.equal((await call(`/api/docs/${id}/screens/prune`, {})).removed, 0);
+  assert.equal(lib.getScenario(id, direct).scenario.steps.length, 2, 'senaryolar silinmez');
+});
