@@ -15,8 +15,8 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { extractPages, makeChunks, makeSections, extOf, SUPPORTED } from './text.js';
-import { buildIndex, bm25, cosineTop, fuse } from './search.js';
-import { cardText, cardChunks, commonLinks } from './gezgin.js';
+import { buildIndex, bm25, cosineTop, fuse, tokens } from './search.js';
+import { cardText, cardChunks, commonLinks, screenGuide, routeTo } from './gezgin.js';
 import * as llm from './llm.js';
 
 export const home = () => process.env.FIKIRHANE_HOME || path.join(os.homedir(), '.fikirhane');
@@ -336,4 +336,73 @@ export async function ask(q, docIds = []) {
   ].filter(Boolean).join('\n\n');
   const answer = await llm.chat({ url: cfg.url, key: cfg.key, model: cfg.chatModel, maxTokens: 1200, messages: [{ role: 'system', content: PROMPT.answer }, { role: 'user', content: `${context}\n\n# Soru\n${question}` }] });
   return { answer, sources };
+}
+
+// ---------- Siteler: tarayıcı testleri için salt okunur bilgi ----------
+// Bir uygulamayı test edecek yapay zekâ (ör. Atölye'deki oturum) ekranı kendisi keşfetmek yerine buradan sorar:
+// hangi ekranlar var, bir ekrana nasıl gidilir, o ekrandaki alan ve düğmelerin seçicileri neler. Her yanıtta hem
+// yapılı veri hem de modele doğrudan verilebilecek kısa bir "text" bulunur. Hiçbiri yerel modeli kullanmaz.
+function site(id) {
+  const meta = metaOf(id);
+  if (!meta || meta.kind !== 'site') throw fail('not-found');
+  return { meta, cards: part(id, 'ekranlar.json', []) };
+}
+const siteInfo = (d) => ({ id: d.id, name: d.name, origin: d.origin, screens: d.pages, approved: Boolean(d.approved), understood: d.state === 'anlamlandırıldı', added: d.added });
+const siteLine = (d) => `${d.name} (${d.origin}): ${d.pages} ekran${d.approved ? ', kullanıcı onayladı' : d.state === 'anlamlandırıldı' ? ', onay bekliyor' : ', henüz anlamlandırılmadı'}`;
+
+export function listSites() {
+  const sites = listDocs().filter((d) => d.kind === 'site');
+  return { sites: sites.map(siteInfo), text: sites.length ? sites.map((d) => `- [${d.id}] ${siteLine(d)}`).join('\n') : 'Fikirhane\'de gezilmiş site yok. Önce Fikirhane\'de "Site gez" ile uygulama tanıtılmalı.' };
+}
+
+/** Sitenin özeti: harita (varsa), kullanıcının notları ve ekran listesi */
+export function siteOverview(id) {
+  const { meta, cards } = site(id);
+  const full = getDocument(id);
+  const notes = [...full.questions.filter((x) => x.answer).map((x) => `Soru: ${x.q} Yanıt: ${x.answer}`), ...full.comments.map((c) => c.text)];
+  const text = [
+    `# ${siteLine(meta)}`,
+    full.map && `## Harita\n${full.map.slice(0, 4000)}`,
+    notes.length && `## Kullanıcının notları (ekran kartlarıyla çelişirse bunlar esas alınır)\n${notes.map((n) => `- ${n}`).join('\n').slice(0, 3000)}`,
+    `## Ekranlar\n${cards.map((c) => `${c.no}. ${c.title} — ${c.path}`).join('\n')}`,
+  ].filter(Boolean).join('\n\n');
+  return { site: siteInfo(meta), map: full.map, notes, screens: cards.map((c) => ({ no: c.no, title: c.title, path: c.path, url: c.url, dialog: c.dialog, from: c.from, via: c.via, iz: c.iz })), text };
+}
+
+/** Tek ekran: alanlar, düğmeler, bağlantılar ve seçicileri */
+export function siteScreen(id, no) {
+  const { cards } = site(id);
+  const card = cards.find((c) => c.no === Number(no));
+  if (!card) throw fail('not-found');
+  return { screen: card, text: screenGuide(card, cards) };
+}
+
+/** Bir ekrana gidiş yolu: doğrudan adres ve kaydedilen tıklama zinciri */
+export function siteRoute(id, no) {
+  const r = routeTo(site(id).cards, no);
+  if (!r) throw fail('not-found');
+  return r;
+}
+
+/** "Üye nereden eklenir", "doğum tarihi alanı" gibi bir sorguyla eşleşen ekranlar ve o ekranlardaki eşleşen öğeler */
+export async function siteFind(q, id) {
+  const query = String(q || '').trim();
+  if (!query) throw fail('empty');
+  const ids = id ? [site(id).meta.id] : listDocs().filter((d) => d.kind === 'site').map((d) => d.id);
+  const want = new Set(tokens(query));
+  const score = (name) => tokens(name).filter((t) => want.has(t)).length;
+  const results = [];
+  for (const hit of ids.length ? await search(query, ids, 12) : []) {
+    if (results.length >= 5 || results.some((r) => r.site === hit.doc && r.no === hit.page)) continue;
+    const card = part(hit.doc, 'ekranlar.json', []).find((c) => c.no === hit.page);
+    if (!card) continue;
+    const elements = [...card.fields.map((x) => ({ kind: 'alan', ...x })), ...card.buttons.map((x) => ({ kind: x.role === 'tab' ? 'sekme' : 'düğme', ...x })), ...card.links.map((x) => ({ kind: 'bağlantı', ...x }))]
+      .map((x) => ({ kind: x.kind, name: x.name, locator: x.locator, hit: score(x.name) })).filter((x) => x.hit > 0).sort((a, b) => b.hit - a.hit).slice(0, 8)
+      .map((x) => ({ kind: x.kind, name: x.name, locator: x.locator }));
+    results.push({ site: hit.doc, name: hit.name, no: card.no, title: card.title, path: card.path, url: card.url, dialog: card.dialog, elements });
+  }
+  const text = results.length
+    ? results.map((r) => [`[${r.site}] Ekran ${r.no}: ${r.title} — ${r.dialog ? `${r.path} (açık pencere)` : r.url}`, ...r.elements.map((e) => `- ${e.kind} ${e.name}${e.locator ? `: ${e.locator}` : ''}`)].join('\n')).join('\n\n')
+    : 'Eşleşen ekran bulunamadı.';
+  return { results, text };
 }

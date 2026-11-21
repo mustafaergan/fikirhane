@@ -18,11 +18,17 @@ const noBrowser = gezgin.findBrowser() ? false : 'Edge ya da Chrome bulunamadı'
 
 test('adres kalıbı: kimlik görünümlü bölümler ve sorgu değerleri ekranı değiştirmez', () => {
   assert.equal(gezgin.urlPattern('https://uygulama.example.com/urun/12'), '/urun/{id}');
-  assert.equal(gezgin.urlPattern('https://uygulama.example.com/urun/57?sekme=fiyat&dil=tr'), '/urun/{id}?dil&sekme');
+  assert.equal(gezgin.urlPattern('https://uygulama.example.com/urun/57?sekme=fiyat&dil=tr'), '/urun/{id}?dil&sekme=fiyat', 'ekranı seçen sorgu kelimesi kalıba girer');
   assert.equal(gezgin.urlPattern('https://uygulama.example.com/kayit/3f2b8c1e-1a2b-4c3d-9e8f-001122334455/duzenle'), '/kayit/{id}/duzenle');
   assert.equal(gezgin.urlPattern('https://uygulama.example.com/#/siparis/8'), '/#/siparis/{id}');
   assert.equal(gezgin.urlPattern('https://uygulama.example.com/yardim#bolum-2'), '/yardim', 'sayfa içi çapa ekranı değiştirmez');
-  assert.equal(gezgin.screenPath('https://uygulama.example.com/ara?q=gizli+arama&sayfa=2'), '/ara?q=…&sayfa=…', 'sorgu değerleri karta yazılmaz');
+  assert.equal(gezgin.screenPath('https://uygulama.example.com/ara?q=gizli+arama&sayfa=2'), '/ara?q=…&sayfa={id}', 'arama metni karta yazılmaz');
+  // Sorguyla yönlenen eski tip uygulamalar: ?action=liste ile ?action=duzenle ayrı ekranlardır
+  const php = 'https://uygulama.example.com/index.php';
+  assert.equal(gezgin.urlPattern(`${php}?action=liste&q=kalem`), '/index.php?action=liste&q');
+  assert.notEqual(gezgin.urlPattern(`${php}?action=liste`), gezgin.urlPattern(`${php}?action=duzenle`));
+  assert.equal(gezgin.urlPattern(`${php}?action=duzenle&id=12`), gezgin.urlPattern(`${php}?action=duzenle&id=57`));
+  assert.equal(gezgin.cleanUrl(`${php}?action=duzenle&id=12&q=gizli+arama#ust`), `${php}?action=duzenle&id=12`, 'gidilebilir adreste veri değeri kalmaz');
 });
 
 test('otomatik gezintide gidilmeyen bağlantılar: çıkış, silme, indirme ve dosyalar', () => {
@@ -81,6 +87,37 @@ test('ortak menü her kartta yinelenmez; arama parçaları ekran başlığını 
   assert.ok(third.every((c) => c.text.startsWith('Ekran 3: Sayfa 3') && c.text.length <= 1000));
 });
 
+test('gidiş yolu ve seçicili ekran özeti: tıklama zinciri seçicilere çevrilir', () => {
+  const origin = 'https://uygulama.example.com';
+  const via = (s) => (!s ? '' : s.row ? 'tablo satırındaki bağlantı' : `"${s.name}" ${s.role === 'link' ? 'bağlantısı' : 'düğmesi'}`);
+  const mk = (no, from, step, raw) => ({ no, from, step, via: via(step), ...gezgin.makeCard({ origin, ...raw, url: origin + raw.url }, origin) });
+  const cards = [
+    mk(1, null, null, { url: '/?oturum=abc123xyz', title: 'Ana sayfa', links: [{ name: 'Üyeler', href: `${origin}/uyeler`, locator: "getByRole('link', { name: 'Üyeler' })" }] }),
+    mk(2, 1, { role: 'link', name: 'Üyeler', row: false }, { url: '/uyeler', title: 'Üyeler', buttons: [{ name: 'Yeni üye', role: 'button', locator: "getByTestId('yeni')" }], links: [{ name: 'Ali', href: `${origin}/uye/7`, row: true }] }),
+    mk(3, 2, { role: 'button', name: 'Yeni üye', row: false }, { url: '/uyeler', title: 'Üyeler', dialog: 'Yeni üye', fields: [{ name: 'Ad', type: 'text', required: true, locator: "getByLabel('Ad')" }], buttons: [{ name: 'Kaydet', role: 'button' }, { name: 'Kaydet', role: 'button' }] }),
+    mk(4, 2, { role: 'link', name: '', row: true }, { url: '/uye/7', title: 'Üye' }),
+    mk(5, 4, null, { url: '/raporlar', title: 'Raporlar' }),
+    mk(6, 5, { role: 'button', name: 'Gizli düğme', row: false }, { url: '/raporlar/aylik', title: 'Aylık' }),
+  ];
+  assert.equal(cards[0].url, `${origin}/`, 'oturum değeri adrese yazılmaz');
+  const dialog = gezgin.routeTo(cards, 3);
+  assert.equal(dialog.direct, '', 'açık pencerenin doğrudan adresi olmaz');
+  assert.deepEqual(dialog.steps.map((s) => [s.action, s.screen, s.url || s.locator]), [['goto', 1, `${origin}/`], ['click', 2, "getByRole('link', { name: 'Üyeler' })"], ['click', 3, "getByTestId('yeni')"]]);
+  assert.equal(dialog.text, ['Ekran 3: Üyeler › Yeni üye', 'Doğrudan adresi yok: açık pencere, tıklamayla açılır.', 'Adım adım (gezintide kaydedilen yol):',
+    `1. page.goto('${origin}/') → Ekran 1: Ana sayfa`, "2. page.getByRole('link', { name: 'Üyeler' }).click() → Ekran 2: Üyeler", "3. page.getByTestId('yeni').click() → Ekran 3: Üyeler › Yeni üye"].join('\n'));
+  const row = gezgin.routeTo(cards, 4);
+  assert.equal(row.direct, `${origin}/uye/7`);
+  assert.equal(row.steps.at(-1).locator, 'locator(\'a[href*="/uye/"]\').first()');
+  assert.match(row.text, /örnek kayıt/);
+  // Tıklaması kaydedilmemiş ekran (adres çubuğundan gidilmiş): yol oradan başlar; seçicisi bulunamayan adım söylenir
+  const far = gezgin.routeTo(cards, 6);
+  assert.deepEqual(far.steps.map((s) => [s.action, s.screen]), [['goto', 5], ['click', 6]]);
+  assert.ok(far.text.endsWith('2. "Gizli düğme" düğmesi (seçici bulunamadı; ekran özetine bakın) → Ekran 6: Aylık'));
+  assert.equal(gezgin.routeTo(cards, 99), null);
+  assert.equal(gezgin.screenGuide(cards[2], cards), ['Ekran 3: Üyeler › Yeni üye', `Adres: ${origin}/uyeler`, 'Açık pencere: Yeni üye (adres değişmeden, tıklamayla açılır)', 'Geliş: Ekran 2 (Üyeler) → "Yeni üye" düğmesi',
+    'Alanlar:', "- Ad (metin, zorunlu): getByLabel('Ad')", 'Düğmeler:', '- Kaydet (2 adet; .nth(i) ile seçilir) (seçici yok)'].join('\n'));
+});
+
 // ---------- Gerçek tarayıcıyla ----------
 const hits = [];
 const seen = [];
@@ -97,14 +134,14 @@ const PAGES = {
     + '<tr><td><a href="/urun/2">Mavi Defter</a></td><td>30</td><td><button>Düzenle</button><a href="/sil?id=2">Sil</a></td></tr></tbody></table>'),
   '/urun': page('Ürün', '<h1>Ürün ayrıntısı</h1><table><tr><td><label for="f">Fiyat</label></td><td><input id="f" type="number" required></td></tr></table>'
     + '<button data-testid="kaydet">Kaydet</button><button aria-label="Kapat">×</button><button><svg width="8" height="8"></svg></button>'),
-  '/uyeler': page('Üyeler', '<h1>Üyeler</h1><a href="/uyeler/yeni">Yeni üye ekle</a>'),
+  '/uyeler': page('Üyeler', '<h1>Üyeler</h1><a href="/uyeler/yeni">Yeni üye ekle</a> <a href="/uyeler?ara=gizli-arama">Son arama</a>'),
   '/uyeler/yeni': page('Yeni üye', '<h1>Yeni üye</h1><label>Ad <input></label>'),
 };
 before(async () => {
   site = http.createServer((req, res) => {
     if (!req.url.includes('favicon')) hits.push(`${req.method} ${req.url}`);
     res.setHeader('content-type', 'text/html; charset=utf-8');
-    res.end(PAGES[/^\/urun\/\d+$/.test(req.url) ? '/urun' : req.url] || page('Yok', '<h1>Bulunamadı</h1>'));
+    res.end(PAGES[/^\/urun\/\d+$/.test(req.url) ? '/urun' : req.url.split('?')[0]] || page('Yok', '<h1>Bulunamadı</h1>'));
   });
   llm = http.createServer((req, res) => {
     let body = '';
@@ -162,7 +199,7 @@ test('site gezilir: ekranlar kart olur, tıklama "geliş" olarak yazılır, otom
   assert.deepEqual(t.cards.map((c) => c.path).sort(), ['/', '/', '/urun/1', '/urunler', '/uyeler', '/uyeler/yeni']);
   assert.ok(t.crawl.skipped >= 3, 'çıkış, silme ve dosya bağlantıları atlanır');
   assert.deepEqual(hits.filter((h) => !h.startsWith('GET ')), [], 'hiçbir form gönderilmez');
-  assert.ok(!hits.some((h) => /cikis|sil|rapor|urun\/2/.test(h)), `gidilmemesi gereken adrese gidildi: ${hits.join(', ')}`);
+  assert.ok(!hits.some((h) => /cikis|sil|rapor|urun\/2|gizli-arama/.test(h)), `gidilmemesi gereken adrese gidildi: ${hits.join(', ')}`);
 
   // Belge olarak kaydedilir; yapılı kartlarda seçiciler durur
   const fin = await call('/api/tour/finish', {});
@@ -174,9 +211,10 @@ test('site gezilir: ekranlar kart olur, tıklama "geliş" olarak yazılır, otom
   const products = screens.find((s) => s.path === '/urunler');
   assert.deepEqual(products.fields.map((f) => [f.name, f.type, f.locator]), [['Ürün adı', 'text', "getByLabel('Ürün adı')"], ['Kategori', 'select', "getByLabel('Kategori')"], ['Barkod', 'text', "getByPlaceholder('Barkod')"], ['p', 'password', 'locator(\'[name="p"]\')']]);
   assert.deepEqual(products.fields[1].options, ['Hepsi', 'Kırtasiye']);
-  assert.deepEqual([products.columns, products.rowActions, products.rowLinks.map((r) => r.pattern)], [['Ürün', 'Fiyat'], ['Düzenle'], ['/urun/{id}', '/sil?id']]);
+  assert.deepEqual([products.columns, products.rowActions, products.rowLinks.map((r) => r.pattern)], [['Ürün', 'Fiyat'], ['Düzenle'], ['/urun/{id}', '/sil?id={id}']]);
+  assert.equal(products.from, 1, 'tıklanan bağlantı kapanan pencerede değil ana ekranda: geliş oraya bağlanır');
   const detail = screens.find((s) => s.path === '/urun/1');
-  assert.deepEqual([detail.from, detail.via], [3, 'tablo satırındaki bağlantı']);
+  assert.deepEqual([detail.from, detail.via, detail.url], [3, 'tablo satırındaki bağlantı', `${siteUrl}/urun/1`]);
   assert.deepEqual(detail.fields.map((f) => [f.name, f.required, f.locator]), [['Fiyat', true, "getByLabel('Fiyat')"]], 'yerleşim tablosundaki alan veri sayılmaz');
   assert.deepEqual(detail.buttons.map((b) => b.locator), ["getByTestId('kaydet')", "getByRole('button', { name: 'Kapat' })"]);
   assert.equal(detail.unnamed, 1);
@@ -188,7 +226,30 @@ test('site gezilir: ekranlar kart olur, tıklama "geliş" olarak yazılır, otom
   const dir = path.join(tmp, 'belgeler', id);
   assert.deepEqual(fs.readdirSync(dir).sort(), ['ekranlar.json', 'meta.json', 'parcalar.json', 'sayfalar.json']);
   const disk = fs.readdirSync(dir).map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
-  assert.ok(!/gizli-deger|cok-gizli|Kırmızı Kalem|Mavi Defter|48\.250/.test(disk), 'alan değerleri, satır verileri ve sayfa metni kaydedilmez');
+  assert.ok(!/gizli-deger|cok-gizli|gizli-arama|Kırmızı Kalem|Mavi Defter|48\.250/.test(disk), 'alan değerleri, sorgu değerleri, satır verileri ve sayfa metni kaydedilmez');
+
+  // Salt okunur site uçları: test yapacak araç ekranı keşfetmek yerine buradan sorar
+  const sites = await call('/api/sites');
+  assert.deepEqual(sites.sites.map((s) => [s.id, s.origin, s.screens, s.approved]), [[id, siteUrl, 6, false]]);
+  assert.ok(sites.text.startsWith(`- [${id}] `) && sites.text.endsWith(': 6 ekran, henüz anlamlandırılmadı'), sites.text);
+  const overview = await call(`/api/sites/${id}`);
+  assert.ok(overview.text.includes('## Ekranlar\n1. Hoş geldiniz — /\n2. Hoş geldiniz › Yeni üye kaydı — /\n3. Ürünler — /urunler\n'), overview.text);
+  assert.equal(overview.screens.length, 6);
+  const guide = await call(`/api/sites/${id}/screens/${products.no}`);
+  assert.ok(guide.text.includes("Alanlar:\n- Ürün adı (metin): getByLabel('Ürün adı')\n- Kategori (seçim: Hepsi, Kırtasiye): getByLabel('Kategori')\n- Barkod (metin): getByPlaceholder('Barkod')\n"), guide.text);
+  assert.ok(guide.text.includes("Düğmeler:\n- Ara: getByRole('button', { name: 'Ara' })\nOrtak menü: 5 bağlantı (seçicileri Ekran 1 özetinde)\nTablo sütunları: Ürün | Fiyat\nSatır işlemleri (her satırda yinelenir): Düzenle\n"), guide.text);
+  const route = await call(`/api/sites/${id}/route/${detail.no}`);
+  assert.deepEqual(route.steps.map((s) => [s.action, s.screen, s.url || s.locator]), [['goto', 1, `${siteUrl}/`], ['click', 3, "getByRole('link', { name: 'Ürünler' })"], ['click', detail.no, 'locator(\'a[href*="/urun/"]\').first()']]);
+  assert.equal(route.direct, `${siteUrl}/urun/1`);
+  const toDialog = await call(`/api/sites/${id}/route/${dialog.no}`);
+  assert.deepEqual([toDialog.direct, toDialog.steps.at(-1).locator], ['', "getByRole('button', { name: 'Yeni üye' })"]);
+  const hit = await call(`/api/sites/find?q=${encodeURIComponent('kategori seçimi')}`);
+  assert.deepEqual([hit.results[0].no, hit.results[0].url, hit.results[0].elements], [products.no, `${siteUrl}/urunler`, [{ kind: 'alan', name: 'Kategori', locator: "getByLabel('Kategori')" }]]);
+  assert.ok(hit.text.startsWith(`[${id}] Ekran 3: Ürünler — ${siteUrl}/urunler\n- alan Kategori: getByLabel('Kategori')`), hit.text);
+  assert.equal((await call(`/api/sites/find?q=${encodeURIComponent('zzz fatura')}&site=${id}`)).text, 'Eşleşen ekran bulunamadı.');
+  assert.equal((await call('/api/sites/find?q=')).code, 'empty');
+  assert.equal((await call('/api/sites/yok/screens/1')).code, 'not-found');
+  assert.equal((await call(`/api/sites/${id}/route/99`)).code, 'not-found');
 
   // Arama ve belge ayrıntısı belgelerle aynı yoldan çalışır
   const found = await call('/api/search', { q: 'barkod kategori' });
