@@ -25,18 +25,34 @@ const MAX_STATES = 6; // aynı adres kalıbında (açılan pencere, sekme gibi) 
 // ---------- Adresler ----------
 const ID_PART = /^(\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{16,})$/i;
 const routeHash = (u) => (/^#[/!]/.test(u.hash) ? u.hash : '');
-/** Ekranın adresi: yol + sorgu anahtarları (değerler değil) + varsa "#/…" biçimli uygulama yolu */
+// Sorgu değerleri üç türdür: ekranı seçen kelime (?action=list; eski tip uygulamalar böyle yönlenir), kimlik (?id=12)
+// ve geri kalan her şey (arama metni, süzgeç: kullanıcının verisi). Yalnızca ilki ekranı belirler ve karta yazılır.
+const ROUTE_KEY = /^(action|act|do|cmd|view|tab|module|mod|mode|section|screen|route|page|menu|sayfa|islem|sekme|bolum|ekran)$/i;
+const ROUTE_WORD = /^[a-z][\w.-]{0,30}$/i;
+function query(u) {
+  const out = [];
+  for (const key of [...new Set(u.searchParams.keys())].sort()) {
+    const value = u.searchParams.get(key);
+    out.push({ key, value, kind: ID_PART.test(value) ? 'id' : ROUTE_KEY.test(key) && ROUTE_WORD.test(value) ? 'route' : 'data' });
+  }
+  return out;
+}
+const joinQuery = (list) => (list.length ? `?${list.join('&')}` : '');
+/** Ekranın adresi (gösterim): yol + sorgu (veri değerleri "…" olur) + varsa "#/…" biçimli uygulama yolu */
 export function screenPath(url) {
   const u = new URL(url);
-  const keys = [...new Set(u.searchParams.keys())].sort();
-  return u.pathname + (keys.length ? `?${keys.map((k) => `${k}=…`).join('&')}` : '') + routeHash(u);
+  return u.pathname + joinQuery(query(u).map((q) => `${q.key}=${q.kind === 'route' ? q.value : q.kind === 'id' ? '{id}' : '…'}`)) + routeHash(u);
 }
 /** Adres kalıbı: sayı ve kimlik görünümlü bölümler {id} olur; /urun/12 ile /urun/57 aynı ekrandır */
 export function urlPattern(url) {
   const u = new URL(url);
   const parts = (p) => p.split('/').map((s) => (ID_PART.test(s) ? '{id}' : s)).join('/');
-  const keys = [...new Set(u.searchParams.keys())].sort();
-  return parts(u.pathname) + (keys.length ? `?${keys.join('&')}` : '') + parts(routeHash(u));
+  return parts(u.pathname) + joinQuery(query(u).map((q) => (q.kind === 'route' ? `${q.key}=${q.value}` : q.kind === 'id' ? `${q.key}={id}` : q.key))) + parts(routeHash(u));
+}
+/** Gidilebilir adres: ekranı seçen kelimeler ve kimlikler kalır, veri değerleri (arama metni vb.) atılır */
+export function cleanUrl(url) {
+  const u = new URL(url);
+  return u.origin + u.pathname + joinQuery(query(u).filter((q) => q.kind !== 'data').map((q) => `${encodeURIComponent(q.key)}=${encodeURIComponent(q.value)}`)) + routeHash(u);
 }
 const DANGER = /(çıkış|cikis|oturumu kapat|log-?out|sign-?out|\bsil\b|silin|delete|remove|kaldır|iptal|cancel|onayla|approve|reddet|reject|gönder|export|dışa aktar|indir|download|yazdır|print)/i;
 const FILE = /\.(pdf|zip|rar|7z|xlsx?|docx?|pptx?|csv|exe|msi|png|jpe?g|gif|svg|mp4|mp3)$/i;
@@ -165,7 +181,7 @@ const digits = (s) => String(s).replace(/\d+/g, '#').toLowerCase();
 /** Sayfadan gelen ham veriyi (güvenilmez) temizler, kısaltır ve karta çevirir */
 export function makeCard(raw, origin) {
   const list = (v, n) => (Array.isArray(v) ? v.slice(0, n) : []);
-  const c = { url: String(raw.url || ''), path: screenPath(raw.url), pattern: urlPattern(raw.url), dialog: S(raw.dialog), headings: list(raw.headings, 12).map((h) => S(h)).filter(Boolean),
+  const c = { url: cleanUrl(raw.url), path: screenPath(raw.url), pattern: urlPattern(raw.url), dialog: S(raw.dialog), headings: list(raw.headings, 12).map((h) => S(h)).filter(Boolean),
     fields: [], buttons: [], links: [], columns: list(raw.columns, 30).map((h) => S(h, 40)).filter(Boolean), rowActions: [], rowLinks: [], external: 0, unnamed: Number(raw.unnamed) || 0 };
   const base = S(raw.h1) || S(raw.title, 120) || c.path;
   c.title = c.dialog ? `${base} › ${c.dialog}` : base;
@@ -192,7 +208,7 @@ export function makeCard(raw, origin) {
     try { u = new URL(l.href); } catch { continue; }
     if (!/^https?:$/.test(u.protocol)) continue;
     if (u.origin !== origin) { c.external++; continue; }
-    const href = u.origin + u.pathname + u.search + routeHash(u);
+    const href = cleanUrl(u.href); // arama metni gibi veri değerleri bağlantıdan da atılır
     const pattern = urlPattern(href);
     if (!groups.has(pattern)) groups.set(pattern, []);
     groups.get(pattern).push({ name: S(l.name), href, path: screenPath(href), pattern, row: Boolean(l.row), locator: S(l.locator, 200) });
@@ -263,6 +279,63 @@ export function cardChunks(cards, size = 900) {
   return chunks;
 }
 
+// ---------- Tarayıcı testleri için: seçicili ekran özeti ve gidiş yolu ----------
+const q1 = (s) => `'${String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+const withLocator = (x) => (x.locator ? `: ${x.locator}` : ' (seçici yok)');
+/** Ekranın test yazmaya yetecek özeti: her alan, düğme ve bağlantı Playwright biçiminde seçicisiyle */
+export function screenGuide(c, cards = [], common = commonLinks(cards)) {
+  const first = c.no === cards[0]?.no;
+  const links = first ? c.links : c.links.filter((l) => !common.has(`${l.name}|${l.pattern}`));
+  const from = c.from && cards.find((x) => x.no === c.from);
+  const block = (title, items, f) => (items.length ? [`${title}:`, ...items.slice(0, 60).map((x) => `- ${f(x)}`), ...(items.length > 60 ? [`- … (+${items.length - 60})`] : [])] : []);
+  return [
+    `Ekran ${c.no}: ${c.title}`,
+    `Adres: ${c.url}${c.pattern.includes('{id}') ? ` (kalıp: ${c.pattern}; örnek kayıt)` : ''}`,
+    c.dialog && `Açık pencere: ${c.dialog} (adres değişmeden, tıklamayla açılır)`,
+    (from || c.via) && `Geliş: ${[from && `Ekran ${from.no} (${from.title})`, c.via].filter(Boolean).join(' → ')}`,
+    ...block('Alanlar', c.fields, (f) => `${f.name} (${TYPE_TR[f.type] || f.type}${f.required ? ', zorunlu' : ''}${f.options.length ? `: ${f.options.join(', ')}` : ''})${withLocator(f)}`),
+    ...block('Düğmeler', c.buttons, (b) => `${b.name}${b.role === 'tab' ? ' [sekme]' : b.role === 'menuitem' ? ' [menü]' : ''}${b.n > 1 ? ` (${b.n} adet; .nth(i) ile seçilir)` : ''}${b.disabled ? ' (kapalı)' : ''}${withLocator(b)}`),
+    ...block(first && common.size ? 'Bağlantılar (ortak menü dahil)' : 'Bağlantılar', links, (l) => `${l.name || '(adsız)'} → ${l.path}${withLocator(l)}`),
+    !first && links.length < c.links.length && `Ortak menü: ${c.links.length - links.length} bağlantı (seçicileri Ekran ${cards[0].no} özetinde)`,
+    c.columns.length && `Tablo sütunları: ${c.columns.join(' | ')}`,
+    c.rowActions.length && `Satır işlemleri (her satırda yinelenir): ${c.rowActions.join('; ')}`,
+    c.rowLinks.length && `Satır bağlantıları: ${c.rowLinks.map((r) => `${r.pattern} (${r.n} adet)`).join('; ')}`,
+    c.unnamed > 0 && `Adsız düğmeler: ${c.unnamed} (erişilebilir adı yok; rol ve adla seçilemez)`,
+  ].filter(Boolean).join('\n');
+}
+
+/**
+ * Bir ekrana gidiş: doğrudan adres (varsa) ve gezinti sırasında kaydedilen tıklama zinciri, seçicileriyle.
+ * { target, direct, steps: [{ screen, title, action: 'goto'|'click', url?, what?, locator? }], text } ya da null
+ */
+export function routeTo(cards, no) {
+  const target = cards.find((c) => c.no === Number(no));
+  if (!target) return null;
+  const chain = [];
+  for (let c = target; c && !chain.includes(c); c = cards.find((x) => x.no === c.from)) chain.unshift(c);
+  // Zincir, adresiyle açılabilen en yakın ekrandan başlar (tıklaması kaydedilmemiş bir adım varsa öncesi atılır)
+  let begin = 0;
+  chain.forEach((c, i) => { if (i > 0 && !c.step && !c.dialog) begin = i; });
+  const steps = chain.slice(begin).map((c, i, list) => {
+    if (i === 0) return { screen: c.no, title: c.title, action: 'goto', url: c.url };
+    const prev = list[i - 1];
+    const st = c.step || { role: '', name: '', row: false };
+    let locator = '';
+    if (st.row) locator = st.role === 'link' && c.pattern.includes('{id}') ? `locator(${q1(`a[href*="${c.pattern.split('{id}')[0]}"]`)}).first()` : '';
+    else if (st.role === 'link') locator = prev.links.find((l) => l.name === st.name || l.path === st.name)?.locator || '';
+    else locator = prev.buttons.find((b) => b.name === st.name && b.role === st.role)?.locator || '';
+    return { screen: c.no, title: c.title, action: 'click', what: c.via || 'kaydedilmemiş bir adım', locator };
+  });
+  const direct = target.dialog ? '' : target.url;
+  const line = (s, i) => `${i + 1}. ${s.action === 'goto' ? `page.goto(${q1(s.url)})` : s.locator ? `page.${s.locator}.click()` : `${s.what} (seçici bulunamadı; ekran özetine bakın)`} → Ekran ${s.screen}: ${s.title}`;
+  const text = [
+    `Ekran ${target.no}: ${target.title}`,
+    direct ? `Doğrudan: page.goto(${q1(direct)})${target.pattern.includes('{id}') ? ' (örnek kayıt; kimlik ortama göre değişebilir)' : ''}` : 'Doğrudan adresi yok: açık pencere, tıklamayla açılır.',
+    steps.length > 1 && `Adım adım (gezintide kaydedilen yol):\n${steps.map(line).join('\n')}`,
+  ].filter(Boolean).join('\n');
+  return { target: target.no, direct, steps, text };
+}
+
 // ---------- Tarayıcı ----------
 export function findBrowser() {
   const custom = process.env.FIKIRHANE_TARAYICI;
@@ -315,9 +388,9 @@ class Cdp {
 
 // ---------- Gezinti (aynı anda bir tane) ----------
 let active = null;
-const clickText = (k) => (k.row ? 'tablo satırındaki bir öğe' : `"${S(k.name)}" ${ROLE_TR[k.role] || 'öğesi'}`);
+const clickText = (k) => (k.row ? (k.role === 'link' ? 'tablo satırındaki bağlantı' : 'tablo satırındaki bir öğe') : `"${S(k.name)}" ${ROLE_TR[k.role] || 'öğesi'}`);
 
-function addCard(tour, raw, { from, via }, session) {
+function addCard(tour, raw, { from, step }, session) {
   if (!raw || raw.origin !== tour.origin) return null; // başka sitedeki sayfalar (ör. ortak giriş sayfası) kaydedilmez
   let c;
   try { c = makeCard(raw, tour.origin); } catch { return null; }
@@ -328,7 +401,14 @@ function addCard(tour, raw, { from, via }, session) {
     const n = tour.states.get(c.pattern) || 0;
     if (n >= MAX_STATES || tour.cards.length >= MAX_CARDS) return null;
     tour.states.set(c.pattern, n + 1);
-    card = { no: tour.cards.length + 1, ...c, from: from || null, via: S(via, 120) };
+    // Tıklanan öğe "önceki ekran" sayılan kartta yoksa (ör. o kart sonradan kapanan bir pencereydi) öğeyi içeren
+    // atasına çıkılır; böylece gidiş yolu gereksiz adım içermez.
+    if (step && !step.row) {
+      const has = (k) => (step.role === 'link' ? k.links.some((l) => l.name === step.name || l.path === step.name) : k.buttons.some((b) => b.name === step.name && b.role === step.role));
+      for (let k = tour.cards[from - 1], i = 0; k && i < 20; k = tour.cards[k.from - 1], i++) if (has(k)) { from = k.no; break; }
+    }
+    // step: bu ekrana getiren tıklama (rol + ad); via onun okunur hâli. Gidiş yolu çıkarılırken seçiciye çevrilir.
+    card = { no: tour.cards.length + 1, ...c, from: from || null, step: step ? { role: S(step.role, 20), name: S(step.name), row: Boolean(step.row) } : null, via: step ? S(clickText(step), 120) : '' };
     tour.cards.push(card);
     tour.keys.set(key, card);
   }
@@ -343,7 +423,7 @@ async function capture(tour, s, opt = {}) {
     try { raw = (await tour.cdp.send('Runtime.evaluate', { expression: EXTRACT, awaitPromise: true, returnByValue: true }, s.id, 20_000)).result?.value; } catch { return null; }
     const before = s.card;
     const click = s.click && Date.now() - s.click.at < 15_000 ? s.click : null;
-    const r = addCard(tour, raw, { from: opt.from ?? before, via: opt.via ?? (click ? clickText(click) : '') }, s);
+    const r = addCard(tour, raw, { from: opt.from ?? before, step: opt.step ?? click }, s);
     if (r && (r.fresh || r.card.no !== before)) s.click = null; // ekran değiştiyse tıklama kullanıldı
     return r;
   };
@@ -481,8 +561,8 @@ export function crawlTour({ limit = 30 } = {}) {
   t.crawl = c;
   const seen = new Set(t.cards.map((x) => x.pattern));
   const offer = (card) => {
-    const items = [...card.links.map((l) => ({ href: l.href, name: l.name, pattern: l.pattern, via: `"${l.name || l.path}" bağlantısı` })),
-      ...card.rowLinks.map((r) => ({ href: r.sample, name: '', pattern: r.pattern, via: 'tablo satırındaki bağlantı' }))];
+    const items = [...card.links.map((l) => ({ href: l.href, name: l.name, pattern: l.pattern, step: { role: 'link', name: l.name || l.path, row: false } })),
+      ...card.rowLinks.map((r) => ({ href: r.sample, name: '', pattern: r.pattern, step: { role: 'link', name: '', row: true } }))];
     for (const it of items) {
       if (seen.has(it.pattern)) continue;
       seen.add(it.pattern);
@@ -501,7 +581,7 @@ export function crawlTour({ limit = 30 } = {}) {
       c.done++;
       if (r.errorText) { s.loaded = null; continue; }
       await Promise.race([loaded, sleep(15_000)]);
-      const got = await capture(t, s, { from: item.from, via: item.via });
+      const got = await capture(t, s, { from: item.from, step: item.step });
       if (got?.fresh) { c.added++; offer(got.card); }
       await sleep(250);
     }
@@ -518,7 +598,7 @@ export async function finishTour() {
   if (t.crawl) { t.crawl.running = false; await Promise.race([t.crawl.promise, sleep(20_000)]); }
   await closeTour(t);
   active = null;
-  return { origin: t.origin, start: t.start, cards: t.cards };
+  return { origin: t.origin, start: cleanUrl(t.start), cards: t.cards };
 }
 export async function cancelTour() {
   const t = active;

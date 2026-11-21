@@ -79,6 +79,12 @@ export function createServer({ port = 3310, host = '127.0.0.1' } = {}) {
     ['POST', /^\/api\/ask$/, async (_m, body) => { const started = Date.now(); const r = await lib.ask(body.q, Array.isArray(body.docs) ? body.docs : []); console.log(`[soru] yanıtlandı: ${r.sources.length} kaynak, ${Math.round((Date.now() - started) / 1000)} sn`); return { ok: true, ...r }; }],
     // Site gezintisi: ayrı bir tarayıcı penceresi açılır, ekranlar kart olarak kaydedilir, bitince belge olur
     ['GET', /^\/api\/docs\/([\w-]+)\/screens$/, async (m) => lib.screens(m[1])],
+    // Siteler (salt okunur): tarayıcı testi yapacak araçlar ekranı keşfetmek yerine buradan sorar
+    ['GET', /^\/api\/sites$/, async () => lib.listSites()],
+    ['GET', /^\/api\/sites\/find$/, async (_m, _b, url) => lib.siteFind(url.searchParams.get('q'), url.searchParams.get('site') || '')],
+    ['GET', /^\/api\/sites\/([\w-]+)$/, async (m) => lib.siteOverview(m[1])],
+    ['GET', /^\/api\/sites\/([\w-]+)\/screens\/(\d+)$/, async (m) => lib.siteScreen(m[1], m[2])],
+    ['GET', /^\/api\/sites\/([\w-]+)\/route\/(\d+)$/, async (m) => lib.siteRoute(m[1], m[2])],
     ['GET', /^\/api\/tour$/, async () => ({ tour: gezgin.tourStatus(), browser: Boolean(gezgin.findBrowser()) })],
     ['POST', /^\/api\/tour$/, async (_m, body) => { await gezgin.startTour({ url: body.url }); console.log('[gezinti] başladı'); return { ok: true, tour: gezgin.tourStatus() }; }],
     ['POST', /^\/api\/tour\/capture$/, async () => ({ ok: true, ...await gezgin.captureNow(), tour: gezgin.tourStatus() })],

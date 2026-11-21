@@ -35,7 +35,21 @@ anlamlandırılır (ekranlar, temel akışlar), sorularla beslenir, onaylanır.
 Amaç, bir uygulamayı bir kez öğrenip sonra her seferinde yeniden keşfetmemektir: "üye nereden eklenir, hangi alanlar
 zorunlu" sorusu ekran kartlarından yanıtlanır; kartlardaki seçiciler (`getByLabel('Fiyat')`,
 `getByRole('button', { name: 'Kaydet' })` gibi, Playwright biçiminde) tarayıcı testlerinde doğrudan kullanılabilir.
-Yapılı kartlar `GET /api/docs/<kimlik>/screens` adresinden okunur.
+
+Tarayıcı testi yapan bir araç (ör. Atölye'deki yapay zekâ oturumu) ekranı her seferinde keşfetmek yerine Fikirhane'ye
+sorar. Uçlar salt okunurdur, yerel modeli kullanmaz ve her yanıtta yapılı verinin yanında modele doğrudan verilebilecek
+kısa bir `text` bulunur:
+
+| Uç | Ne verir |
+|---|---|
+| `GET /api/sites` | Gezilmiş siteler |
+| `GET /api/sites/<kimlik>` | Harita, kullanıcının notları ve ekran listesi |
+| `GET /api/sites/find?q=…&site=<kimlik>` | Sorguyla eşleşen ekranlar ve o ekranlardaki eşleşen alan/düğme seçicileri |
+| `GET /api/sites/<kimlik>/screens/<no>` | Tek ekran: bütün alanlar, düğmeler, bağlantılar ve seçicileri |
+| `GET /api/sites/<kimlik>/route/<no>` | O ekrana gidiş: doğrudan adres ve kaydedilen tıklama zinciri (`page.goto(…)`, `page.getByRole(…).click()`) |
+
+Sorguyla yönlenen eski tip uygulamalarda (`index.php?action=liste`) `action`, `page`, `view`, `tab`, `sayfa`, `islem`
+gibi anahtarların kelime değerleri ekranı belirler; kimlikler `{id}` olur; diğer sorgu değerleri (arama metni vb.) atılır.
 
 Güvenli sınırlar:
 
