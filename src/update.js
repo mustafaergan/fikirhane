@@ -6,13 +6,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import tls from 'node:tls';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_URL = 'https://raw.githubusercontent.com/mustafaergan/fikirhane/main/package.json';
 const API_URL = 'https://api.github.com/repos/mustafaergan/fikirhane/contents/package.json?ref=main';
-const CACHE_MS = 24 * 60 * 60 * 1000; // günde bir kez
-let cache = null;
+// Okunan sürüm yarım saat geçerlidir (arayüz yarım saatte bir sorar). Eskiden sonuç bir gün saklanıyordu: güncellemeden
+// hemen sonra "depodaki = kurulu" sonucu ertesi sabaha kadar kalıyor, o arada çıkan sürümler hiç görünmüyordu.
+const CACHE_MS = 30 * 60 * 1000;
+// Depo okunamadıysa (açılışta ağ henüz hazır değil, bilgisayar uykudan yeni uyandı…) beş dakika sonra yeniden denenir
+const RETRY_MS = 5 * 60 * 1000;
+let cache = null; // { at, latest, failed }
+let logged = '';
 
 /** a > b ise pozitif (yalnızca sayısal parçalar karşılaştırılır: 0.10.0 > 0.9.2) */
 export function compareVersions(a, b) {
@@ -39,14 +44,56 @@ export function applyUpdate() {
   return { started: true };
 }
 
-export async function checkUpdate({ force = false } = {}) {
+/** Adresteki package.json'un sürümü; okunamazsa '' */
+async function versionAt(url, accept) {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000), headers: { accept, 'user-agent': 'fikirhane' } });
+    if (!res.ok) return '';
+    return versionIn(await res.text());
+  } catch { return ''; }
+}
+const versionIn = (text) => { try { const v = String(JSON.parse(text).version || ''); return /^\d+\.\d+\.\d+/.test(v) ? v : ''; } catch { return ''; } };
+
+/**
+ * Aynı dosyayı Windows'un kendi ağ katmanıyla (PowerShell) okur. Node, Windows'ta tanımlı proxy'yi (kurum ağlarındaki
+ * otomatik yapılandırma dahil) kullanmaz; PowerShell kullanır. Güncellemenin kendisi de PowerShell ile indirilir:
+ * doğrudan okuma başarısız olduğunda sürüm de aynı yoldan sorulur ki "güncelleme yapılabiliyor ama görünmüyor" olmasın.
+ * Adres komut satırına yazılmaz, ortam değişkeniyle verilir. Okunamazsa '' döner.
+ */
+export function systemText(url) {
+  if (process.platform !== 'win32') return Promise.resolve('');
+  const cmd = "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; "
+    + '$r = Invoke-WebRequest -Uri $env:FIKIRHANE_DENETIM_ADRESI -UseBasicParsing -TimeoutSec 8; '
+    + 'if ($r.Content -is [byte[]]) { [Text.Encoding]::UTF8.GetString($r.Content) } else { [string]$r.Content }';
+  return new Promise((resolve) => {
+    try {
+      execFile('powershell', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', cmd],
+        { env: { ...process.env, FIKIRHANE_DENETIM_ADRESI: url }, timeout: 20_000, windowsHide: true, encoding: 'utf8' },
+        (err, stdout) => resolve(err ? '' : String(stdout || '').trim()));
+    } catch { resolve(''); }
+  });
+}
+let systemGet = systemText;
+/** Testler için: Windows ağ katmanıyla okuma yerine çağrılacak işlev */
+export function setSystemGet(fn) { systemGet = fn || systemText; }
+/** Testler için: saklanan sonucu siler */
+export function resetUpdateCache() { cache = null; logged = ''; }
+
+/**
+ * Depodaki sürümü okur. { current, latest, available, how, canApply, checked, failed }.
+ * force: saklanan sonuca bakmadan yeniden okur (kullanıcı elle denetlediğinde ve zamanlı denetimde).
+ * Okuma başarısız olursa daha önce görülmüş sürüm unutulmaz (failed: true ile birlikte döner).
+ */
+export async function checkUpdate({ force = false, now = Date.now() } = {}) {
   const current = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
   // Git ile indirilmişse "fikirhane.ps1 guncelle", paketten kurulmuşsa yeni paket
   const how = fs.existsSync(path.join(ROOT, '.git')) ? 'git' : 'paket';
-  const base = { current, latest: null, available: false, how, canApply: canApply() };
-  if (process.env.FIKIRHANE_UPDATE_CHECK === '0') return base;
-  if (!force && cache && Date.now() - cache.at < CACHE_MS) return { ...base, ...cache.value };
-  let value = {};
+  const view = (c) => ({ current, latest: c?.latest || null, available: Boolean(c?.latest) && compareVersions(c.latest, current) > 0, how, canApply: canApply(),
+    ...(c ? { checked: c.at, ...(c.failed ? { failed: true } : {}) } : {}) });
+  if (process.env.FIKIRHANE_UPDATE_CHECK === '0') return view(null);
+  const age = cache ? now - cache.at : Infinity;
+  if (!force && cache && age >= 0 && age < (cache.failed ? RETRY_MS : CACHE_MS)) return view(cache);
+  let latest = '';
   try {
     try {
       if (typeof tls.getCACertificates === 'function' && typeof tls.setDefaultCACertificates === 'function')
@@ -58,17 +105,15 @@ export async function checkUpdate({ force = false } = {}) {
     const custom = process.env.FIKIRHANE_UPDATE_URL;
     const sources = custom ? [[custom, 'application/json']] : [...(force ? [[API_URL, 'application/vnd.github.raw+json']] : []), [DEFAULT_URL, 'application/json']];
     for (const [url, accept] of sources) {
-      try {
-        const res = await fetch(url, { signal: AbortSignal.timeout(8000), headers: { accept, 'user-agent': 'fikirhane' } });
-        if (!res.ok) continue;
-        const latest = String(JSON.parse(await res.text()).version || '');
-        if (/^\d+\.\d+\.\d+/.test(latest)) { value = { latest, available: compareVersions(latest, current) > 0 }; break; }
-      } catch { /* sıradaki kaynak denenir */ }
+      latest = await versionAt(url, accept);
+      if (latest) break;
     }
+    if (!latest) latest = versionIn(await systemGet(custom || DEFAULT_URL));
   } catch { /* ağ yok / engelli: bildirim gösterilmez */ }
-  cache = { at: Date.now(), value };
-  console.log(`[güncelleme] kurulu ${current}, depodaki ${value.latest || 'okunamadı'}`);
-  return { ...base, ...value };
+  cache = latest ? { at: now, latest } : { at: now, latest: cache?.latest || '', failed: true };
+  const line = `[güncelleme] kurulu ${current}, depodaki ${latest || 'okunamadı'}`;
+  if (line !== logged) { logged = line; console.log(line); } // aynı sonuç her denetimde yeniden yazılmaz
+  return view(cache);
 }
 
 /** Bir sonraki günlük denetim anı: yerel saatle "hour":00 (o an geçtiyse ertesi gün) */
@@ -81,13 +126,19 @@ export function nextDailyAt(now, hour = 9) {
 
 /**
  * Güncellemeyi Fikirhane açılır açılmaz bir kez, sonra her sabah 9'da denetler. Bilgisayar o saatte kapalı ya da
- * uykudaysa denetim açıldığında yapılır (saat birkaç dakikada bir yoklanır). Sonuç önbelleğe yazılır; arayüz
- * "Güncelleme var" düğmesini oradan gösterir. FIKIRHANE_UPDATE_HOUR ile saat, FIKIRHANE_UPDATE_CHECK=0 ile kapatma.
+ * uykudaysa denetim açıldığında yapılır (saat birkaç dakikada bir yoklanır). Depo okunamadıysa ertesi sabah beklenmez:
+ * beş dakika sonra, sonra aralığı ikiye katlayarak (en çok saatte bir) yeniden denenir. Sayfa açıkken arayüz ayrıca
+ * yarım saatte bir sorar. FIKIRHANE_UPDATE_HOUR ile saat, FIKIRHANE_UPDATE_CHECK=0 ile kapatma.
  */
-export function startDailyCheck({ hour = Number(process.env.FIKIRHANE_UPDATE_HOUR) || 9, check = () => checkUpdate({ force: true }), now = () => Date.now(), tickMs = 5 * 60 * 1000, firstMs = 5000 } = {}) {
+export function startDailyCheck({ hour = Number(process.env.FIKIRHANE_UPDATE_HOUR) || 9, check = () => checkUpdate({ force: true }), now = () => Date.now(), tickMs = 5 * 60 * 1000, firstMs = 5000, retryMs = RETRY_MS } = {}) {
   if (process.env.FIKIRHANE_UPDATE_CHECK === '0') return () => {};
   let due = nextDailyAt(now(), hour);
-  const run = () => Promise.resolve().then(check).catch(() => {});
+  let wait = retryMs;
+  const run = () => Promise.resolve().then(check).then((r) => {
+    if (!r?.failed) { wait = retryMs; return; }
+    due = Math.min(due, now() + wait);
+    wait = Math.min(wait * 2, 60 * 60 * 1000);
+  }).catch(() => {});
   const first = setTimeout(run, firstMs);
   const timer = setInterval(() => {
     if (now() < due) return;

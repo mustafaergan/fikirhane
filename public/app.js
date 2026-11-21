@@ -515,15 +515,27 @@ $('#themeBtn').onclick = () => {
   document.documentElement.dataset.theme = dark ? 'light' : 'dark';
   try { localStorage.setItem('fikirhane:theme', document.documentElement.dataset.theme); } catch { /* yoksay */ }
 };
-async function checkUpdate() {
-  const u = await api('/api/update');
+async function checkUpdate(manual) {
+  const u = await api(manual ? '/api/update?refresh=1' : '/api/update');
   $('#updateBtn').hidden = !u?.available;
   if (u?.available) { $('#updateBtn').textContent = `Güncelleme var: ${u.latest}`; $('#updateBtn').onclick = async () => { $('#updateBtn').textContent = 'Güncelleniyor…'; await api('/api/update/apply', {}); setTimeout(() => location.reload(), 20000); }; }
+  return u;
 }
+// Sürüm yazısına tıklamak depoyu hemen yeniden sorar (zamanlı denetimi beklemeden) ve sonucu kısa süre gösterir
+const versionLabel = () => `Fikirhane ${state.config.version || ''}`;
+$('#versionText').onclick = async () => {
+  const v = $('#versionText');
+  if (v.disabled) return;
+  v.disabled = true;
+  v.textContent = `${versionLabel()} · denetleniyor…`;
+  const u = await checkUpdate(true);
+  v.textContent = `${versionLabel()} · ${u?.available ? `yeni sürüm: ${u.latest}` : u?.failed || !u?.latest ? 'depo okunamadı (ağ bağlantısını kontrol edin)' : 'güncel'}`;
+  setTimeout(() => { v.textContent = versionLabel(); v.disabled = false; }, 6000);
+};
 
 // ---------- Başlangıç ----------
 state.config = await api('/api/config');
-$('#versionText').textContent = `Fikirhane ${state.config.version || ''}`;
+$('#versionText').textContent = versionLabel();
 renderChip();
 await loadDocs();
 state.view = 'chat';

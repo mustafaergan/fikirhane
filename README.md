@@ -159,7 +159,10 @@ npm test
 | `fikirhane.ps1 masaustu-ac` / `masaustu-kapat` | Masaüstü uygulamasını aç/kapat |
 | `fikirhane.ps1 kaldir` | Kaldır; belgeler ve notlar (`~/.fikirhane`) yalnızca `-Veriler` ile silinir |
 
-Fikirhane açılışta ve her sabah 9'da güncelleme denetler; yeni sürüm varsa sol altta bağlantı çıkar.
+Fikirhane açılışta, her sabah 9'da ve sayfa açıkken yarım saatte bir güncelleme denetler; yeni sürüm varsa sol altta
+bağlantı çıkar. Beklemeden denetlemek için sol alttaki sürüm yazısına ("Fikirhane 0.7.1") tıklayın. Depo okunamazsa
+(ağ henüz hazır değil, bilgisayar uykudan yeni uyandı) beş dakika sonra yeniden denenir; doğrudan erişim yoksa sürüm
+Windows'un ağ ayarlarıyla (tanımlı proxy dahil) sorulur. Ne olduğu `fikirhane.log` içindeki `[güncelleme]` satırında yazar.
 
 ## Veriler
 
