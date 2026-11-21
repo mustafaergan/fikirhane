@@ -1,10 +1,25 @@
-// Yerel dil modeli sunucusu (Ollama, LM Studio, llama.cpp, kurum içi gateway vb.) ile konuşma. OpenAI uyumlu uç noktalar
-// kullanılır: …/models, …/chat/completions, …/embeddings. Belgeler yalnızca ayarlarda yazan adrese gider.
+// Dil modeli sunucusu (bu bilgisayardaki Ollama, LM Studio, llama.cpp ya da ağdaki bir kurum gateway'i) ile konuşma.
+// OpenAI uyumlu uç noktalar kullanılır: …/models, …/chat/completions, …/embeddings. Belgeler yalnızca ayarlarda yazan
+// adrese gider.
+//
+// Adres kuralı Atölye'ninkiyle aynıdır (Atölye: src/kopru.js, openaiEndpoint): aynı kayıt iki uygulamada aynı adrese
+// gider, dışa aktarılan dosya iki yönde de aynı sunucuyu gösterir. Biri değişirse öteki de değişmelidir.
 
-/** Kayıtlı adres: sondaki eğik çizgi, /chat/completions ve /v1 atılır (başka bir sürüm yolu, ör. /v2, kalır) */
-export const base = (url) => String(url || '').trim().replace(/\/+$/, '').replace(/\/chat\/completions$/i, '').replace(/\/+$/, '').replace(/\/v1$/i, '');
-/** API kökü: adres bir sürüm yoluyla (/v2 gibi) bitiyorsa o, değilse /v1 eklenir */
-const api = (url) => { const u = base(url); return /\/v\d+$/i.test(u) ? u : `${u}/v1`; };
+/** Kayıtlı adres: yazıldığı gibi kalır; yalnızca baştaki/sondaki boşluk ve sondaki eğik çizgiler atılır */
+export const base = (url) => String(url || '').trim().replace(/\/+$/, '');
+/**
+ * OpenAI uyumlu sohbet uç noktası: tam adres yazıldıysa (…/chat/completions) olduğu gibi kullanılır; adres bir sürüm
+ * yoluyla (/v1, /v2) bitiyorsa ona, değilse /v1'e eklenir.
+ */
+export const chatUrl = (url) => { const u = base(url); return /\/chat\/completions$/i.test(u) ? u : /\/v\d+$/i.test(u) ? `${u}/chat/completions` : `${u}/v1/chat/completions`; };
+/** Sohbet uç noktasının yanındaki uç nokta (models, embeddings) */
+const beside = (url, name) => chatUrl(url).replace(/\/chat\/completions$/i, `/${name}`);
+/** Anthropic uyumlu uç nokta: Claude Code'un yaptığı gibi adrese /v1/messages eklenir (sondaki /v1 yinelenmez) */
+const messagesUrl = (url) => `${base(url).replace(/\/v1$/i, '')}/v1/messages`;
+/** Sunucunun kökü (Ollama'nın kendi model listesi için) */
+const root = (url) => base(url).replace(/\/chat\/completions$/i, '').replace(/\/v\d+$/i, '');
+/** İki adres aynı sunucuyu mu gösteriyor (http://x, http://x/v1 ve http://x/v1/chat/completions aynıdır) */
+export const sameServer = (a, b) => Boolean(base(a) && base(b)) && chatUrl(a).toLowerCase() === chatUrl(b).toLowerCase();
 // Kurum içi gateway'ler anahtarı farklı başlıklarda bekleyebilir; üçü birden gönderilir
 const headers = (key) => ({ 'content-type': 'application/json', 'anthropic-version': '2023-06-01', ...(key ? { authorization: `Bearer ${key}`, 'api-key': key, 'x-api-key': key } : {}) });
 const fail = (code, detail, status) => Object.assign(new Error(detail || code), { code, detail, status });
@@ -13,13 +28,25 @@ export function validUrl(url) {
   try { const u = new URL(base(url)); return (u.protocol === 'http:' || u.protocol === 'https:') && !u.username; } catch { return false; }
 }
 
+// Ulaşılamayan sunucu: hangi sunucu ve neden. Kurum ağındaki bir adres o ağın dışından denenince çoğunlukla yanıt
+// gelmez (zaman aşımı); bu, bu bilgisayarda çalışmayan bir sunucudan (bağlantı reddedildi) ayırt edilebilsin.
+const REASONS = { ECONNREFUSED: 'bağlantı reddedildi; sunucu çalışmıyor olabilir', ENOTFOUND: 'bu adda bir sunucu bulunamadı', EAI_AGAIN: 'sunucu adı çözülemedi',
+  ECONNRESET: 'bağlantı kesildi', ETIMEDOUT: 'bağlantı kurulamadı (zaman aşımı)', UND_ERR_CONNECT_TIMEOUT: 'bağlantı kurulamadı (zaman aşımı)', EHOSTUNREACH: 'sunucuya giden yol yok', ENETUNREACH: 'ağa ulaşılamıyor' };
+function unreachable(url, err, timeoutMs) {
+  let host = ''; try { host = new URL(url).host; } catch { /* yoksay */ }
+  const code = String(err.cause?.code || err.code || '');
+  const timedOut = err.name === 'TimeoutError' || err.cause?.name === 'TimeoutError';
+  const why = timedOut ? `${Math.round(timeoutMs / 1000)} saniyede yanıt gelmedi` : REASONS[code] ? `${REASONS[code]}` : /CERT|SELF_SIGNED|UNABLE_TO_VERIFY/i.test(code) ? `sunucunun sertifikası doğrulanamadı (${code})` : (code || err.cause?.message || err.message);
+  return fail('unreachable', `${host}: ${why}`);
+}
+
 async function request(url, { method = 'GET', key, body, timeoutMs = 30_000, signal } = {}) {
   let res;
   try {
     res = await fetch(url, { method, headers: headers(key), body: body ? JSON.stringify(body) : undefined, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs) });
   } catch (err) {
     if (signal?.aborted) throw fail('cancelled');
-    throw fail('unreachable', err.cause?.code || err.message);
+    throw unreachable(url, err, timeoutMs);
   }
   const text = await res.text();
   if (!res.ok) throw fail(res.status === 404 ? 'not-found' : 'bad-response', `HTTP ${res.status} ${text.slice(0, 200)}`, res.status);
@@ -29,11 +56,11 @@ async function request(url, { method = 'GET', key, body, timeoutMs = 30_000, sig
 /** Sunucudaki modeller (OpenAI uyumlu liste; yoksa Ollama'nın kendi listesi) */
 export async function listModels({ url, key }) {
   try {
-    const d = await request(`${api(url)}/models`, { key, timeoutMs: 8000 });
+    const d = await request(beside(url, 'models'), { key, timeoutMs: 8000 });
     const ids = (Array.isArray(d?.data) ? d.data : []).map((m) => m?.id).filter(Boolean);
     if (ids.length) return ids;
   } catch (err) { if (err.code === 'unreachable') throw err; }
-  const d = await request(`${base(url).replace(/\/v\d+$/i, '')}/api/tags`, { key, timeoutMs: 8000 });
+  const d = await request(`${root(url)}/api/tags`, { key, timeoutMs: 8000 });
   return (Array.isArray(d?.models) ? d.models : []).map((m) => m?.name).filter(Boolean);
 }
 
@@ -49,12 +76,12 @@ export async function chat({ url, key, kind, model, messages, temperature = 0.2,
   if (kind === 'anthropic') {
     const system = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
     const body = { model, max_tokens: maxTokens, messages: messages.filter((m) => m.role !== 'system'), ...(system ? { system } : {}) };
-    const d = await retry(() => send(`${api(url)}/messages`, { ...body, temperature }), () => send(`${api(url)}/messages`, body));
+    const d = await retry(() => send(messagesUrl(url), { ...body, temperature }), () => send(messagesUrl(url), body));
     text = Array.isArray(d?.content) ? d.content.filter((p) => p?.type === 'text').map((p) => p.text).join('') : null;
     if (typeof text !== 'string' || (!text && !Array.isArray(d?.content))) throw fail('bad-response', JSON.stringify(d).slice(0, 200));
   } else {
     const body = { model, messages, stream: false };
-    const d = await retry(() => send(`${api(url)}/chat/completions`, { ...body, temperature, max_tokens: maxTokens }), () => send(`${api(url)}/chat/completions`, body));
+    const d = await retry(() => send(chatUrl(url), { ...body, temperature, max_tokens: maxTokens }), () => send(chatUrl(url), body));
     text = d?.choices?.[0]?.message?.content;
     if (typeof text !== 'string') throw fail('bad-response', JSON.stringify(d).slice(0, 200));
   }
@@ -64,7 +91,7 @@ export async function chat({ url, key, kind, model, messages, temperature = 0.2,
 
 /** Metinlerin embedding vektörleri (her biri Float32Array) */
 export async function embed({ url, key, model, input, timeoutMs = 300_000, signal }) {
-  const d = await request(`${api(url)}/embeddings`, { method: 'POST', key, timeoutMs, signal, body: { model, input } });
+  const d = await request(beside(url, 'embeddings'), { method: 'POST', key, timeoutMs, signal, body: { model, input } });
   const rows = (Array.isArray(d?.data) ? d.data : []).sort((a, b) => (a.index ?? 0) - (b.index ?? 0)).map((r) => Float32Array.from(r.embedding || []));
   if (rows.length !== input.length || !rows[0]?.length) throw fail('bad-response', 'embedding yanıtı eksik');
   return rows;

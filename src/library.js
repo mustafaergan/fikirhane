@@ -32,6 +32,8 @@ const safeName = (name) => String(name || 'belge').replace(/[\\/:*?"<>|\x00-\x1f
 // İki kaynak vardır: elle girilen sunucu (ayarlar.json içinde durur) ya da Atölye'de tanımlı bir yerel model
 // (source: "atolye"). Atölye modeli seçiliyken adres, model ve API anahtarı her kullanımda Atölye'nin kaydından
 // (~/.atolye/yerel-llm.json) okunur, buraya kopyalanmaz: Atölye'de yapılan değişiklik kendiliğinden geçerli olur.
+// Adres her yerde yazıldığı gibi saklanır ve dosyaya öyle yazılır (kırpılmaz): hangi uç noktaya gidileceği llm.js
+// içinde Atölye ile aynı kuralla hesaplanır. Böylece bir kayıt Atölye'de ve Fikirhane'de aynı sunucuya gider.
 const settingsFile = () => path.join(home(), 'ayarlar.json');
 const atolyeFile = () => process.env.FIKIRHANE_ATOLYE_FILE || process.env.ATOLYE_LOCAL_FILE
   || path.join(process.env.ATOLYE_STATE_FILE ? path.dirname(process.env.ATOLYE_STATE_FILE) : path.join(os.homedir(), '.atolye'), 'yerel-llm.json');
@@ -74,9 +76,10 @@ export function saveSettings({ url, chatModel, embedModel, key, source, atolye }
   }
   const u = llm.base(url);
   if (!llm.validUrl(u)) throw fail('bad-url');
+  const same = llm.sameServer(old.url, u);
   writeJson(settingsFile(), { url: u, chatModel: String(chatModel || '').trim(), embedModel: String(embedModel || '').trim(),
-    key: String(key || '').trim() || (old.url === u ? old.key : ''), // anahtar boşsa eskisi kalır; ama başka bir sunucuya taşınmaz
-    kind: old.url === u ? old.kind : 'openai', source: '', atolye: '' });
+    key: String(key || '').trim() || (same ? old.key : ''), // anahtar boşsa eskisi kalır; ama başka bir sunucuya taşınmaz
+    kind: same ? old.kind : 'openai', source: '', atolye: '' });
   return publicSettings();
 }
 /** "Bağlantıyı dene" için: henüz kaydedilmemiş ayarın (ya da seçilen Atölye modelinin) bağlantı bilgisi */
@@ -89,7 +92,7 @@ export function draftSettings({ url, key, chatModel, embedModel, source, atolye 
   const old = stored();
   const u = llm.base(url || old.url);
   if (!llm.validUrl(u)) throw fail('bad-url');
-  const same = u === old.url;
+  const same = llm.sameServer(old.url, u);
   return { url: u, key: String(key || '').trim() || (same ? old.key : ''), kind: same ? old.kind : 'openai', chatModel: line(chatModel, 120), embedModel: line(embedModel, 120) };
 }
 
@@ -146,7 +149,7 @@ export function importSettings({ data, pass, pick } = {}) {
   const old = stored();
   const url = llm.base(m.url);
   // Embedding modeli dosyada yoksa (Atölye dosyası) ve sunucu aynıysa var olan korunur
-  writeJson(settingsFile(), { url, chatModel: text(m.model, 120), embedModel: text(m.embedModel, 120) || (old.url === url ? old.embedModel : ''), key: keys[i],
+  writeJson(settingsFile(), { url, chatModel: text(m.model, 120), embedModel: text(m.embedModel, 120) || (llm.sameServer(old.url, url) ? old.embedModel : ''), key: keys[i],
     kind: kindOf(m), source: '', atolye: '' });
   // Atölye'de Anthropic uyumlu diye kayıtlı sunucu OpenAI uç noktasını da sunuyor olabilir (Ollama gibi) ya da olmayabilir
   return { settings: publicSettings(), model: text(m.model, 120), anthropic: kindOf(m) === 'anthropic' };

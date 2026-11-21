@@ -17,6 +17,7 @@ const { createServer } = await import('../src/server.js');
 const seen = [];
 const gateway = [];
 const anthropic = [];
+const paths = []; // sahte modele gelen her isteğin yolu
 let llm; let app; let base; let llmUrl;
 before(async () => {
   llm = http.createServer((req, res) => {
@@ -24,6 +25,7 @@ before(async () => {
     req.on('data', (c) => { body += c; });
     req.on('end', () => {
       const j = body ? JSON.parse(body) : {};
+      paths.push(req.url);
       res.setHeader('content-type', 'application/json');
       if (req.url.endsWith('/models')) return res.end(JSON.stringify({ data: [{ id: 'sohbet-modeli' }, { id: 'vektor-modeli' }] }));
       // "kurum-modeli" temperature alanını reddeden bir gateway gibi davranır
@@ -165,12 +167,12 @@ test('yerel model ayarı dışa ve içe aktarılır: API anahtarı şifrelidir; 
     { name: 'Ollama', url: llmUrl, model: 'sohbet-modeli', kind: 'anthropic' },
     { name: 'Bozuk', url: 'adres değil', model: 'x' }] };
   const ask = await call('/api/settings/import', { data: atolye, pass: 'atolye' });
-  assert.deepEqual(ask.choose, [{ i: 0, name: 'Kurum', url: `${llmUrl}/gw/v2`, model: 'kurum-modeli', kind: 'openai' }, { i: 1, name: 'Ollama', url: llmUrl, model: 'sohbet-modeli', kind: 'anthropic' }]);
+  assert.deepEqual(ask.choose, [{ i: 0, name: 'Kurum', url: `${llmUrl}/gw/v2/chat/completions`, model: 'kurum-modeli', kind: 'openai' }, { i: 1, name: 'Ollama', url: llmUrl, model: 'sohbet-modeli', kind: 'anthropic' }]);
   assert.equal((await call('/api/config')).settings.chatModel, 'sohbet-modeli', 'seçim yapılmadan ayar değişmez');
   const other = await call('/api/settings/import', { data: atolye, pass: 'atolye', pick: 1 });
   assert.deepEqual([other.anthropic, other.settings.embedModel, other.settings.hasKey], [true, 'vektor-modeli', false], 'aynı sunucuda embedding modeli korunur; anahtarsız kayıt eski anahtarı taşımaz');
   const picked = await call('/api/settings/import', { data: atolye, pass: 'atolye', pick: 0 });
-  assert.deepEqual([picked.settings, picked.anthropic], [{ url: `${llmUrl}/gw/v2`, chatModel: 'kurum-modeli', embedModel: '', hasKey: true, ready: true }, false]);
+  assert.deepEqual([picked.settings, picked.anthropic], [{ url: `${llmUrl}/gw/v2/chat/completions`, chatModel: 'kurum-modeli', embedModel: '', hasKey: true, ready: true }, false]);
 
   // Gateway: sürüm yolu korunur, anahtar üç başlıkta gider, reddedilen alanlar olmadan yinelenir
   const t = await call('/api/settings/test', { chatModel: 'kurum-modeli' });
@@ -185,6 +187,39 @@ test('yerel model ayarı dışa ve içe aktarılır: API anahtarı şifrelidir; 
   assert.equal((await call('/api/settings', { url: 'http://127.0.0.1:9', chatModel: 'baska-model' })).settings.hasKey, false);
 });
 
+test('sunucu adresi Atölye ile aynı kuralla çözülür: tam uç nokta yazıldıysa araya /v1 eklenmez; adres dosyada da yazıldığı gibi kalır', async () => {
+  // Atölye'de "…/chat/completions" ile biten adres olduğu gibi kullanılır. Fikirhane eskiden adresi kırpıp /v1 ekliyordu:
+  // sürüm yolu olmayan bir kurum gateway'i (…/gw/chat/completions) Atölye'de çalışıp burada başka bir adrese gidiyordu.
+  const full = `${llmUrl}/gw/chat/completions`;
+  const s = await call('/api/settings', { url: `${full}/`, chatModel: 'kurum-modeli', embedModel: 'vektor-modeli', key: 'kurum-anahtari' });
+  assert.equal(s.settings.url, full, 'adres yazıldığı gibi saklanır');
+  paths.length = 0;
+  const t = await call('/api/settings/test', { url: full, chatModel: 'kurum-modeli', embedModel: 'vektor-modeli' });
+  assert.deepEqual([t.ok, t.chat, t.embed], [true, true, 3], t.error);
+  assert.deepEqual([...new Set(paths)], ['/gw/models', '/gw/chat/completions', '/gw/embeddings'], 'model listesi ve embedding aynı kökten sorulur');
+  assert.equal(gateway.at(-1).headers.authorization, 'Bearer kurum-anahtari', 'aynı sunucuda kayıtlı anahtar kullanılır');
+
+  // Dışa aktarılan dosyada adres kırpılmaz: Atölye bu dosyayı içe aktarınca aynı uç noktaya gider; geri alınınca da aynıdır
+  const ex = await call('/api/settings/export', { pass: 'parolam' });
+  assert.deepEqual([ex.file.models[0].url, ex.file.models[0].kind], [full, 'openai']);
+  await call('/api/settings', { url: 'http://127.0.0.1:9', chatModel: 'baska-model' });
+  const im = await call('/api/settings/import', { data: ex.file, pass: 'parolam' });
+  assert.deepEqual([im.settings.url, im.settings.hasKey], [full, true]);
+
+  // Öteki yazılışlar değişmedi: yalın adres ve /v1 → /v1/…, başka sürüm yolu korunur
+  for (const [url, want] of [[llmUrl, '/v1/chat/completions'], [`${llmUrl}/v1`, '/v1/chat/completions'], [`${llmUrl}/v1/chat/completions`, '/v1/chat/completions'], [`${llmUrl}/gw/v2`, '/gw/v2/chat/completions']]) {
+    paths.length = 0;
+    assert.equal((await call('/api/settings/test', { url, chatModel: 'sohbet-modeli' })).ok, true, url);
+    assert.equal(paths.at(-1), want, url);
+  }
+
+  // Ulaşılamayan sunucuda hangi sunucunun neden yanıt vermediği yazılır (kurum adresi ağ dışından denenirse anlaşılsın)
+  const closed = await new Promise((resolve) => { const srv = http.createServer(); srv.listen(0, '127.0.0.1', () => { const { port } = srv.address(); srv.close(() => resolve(port)); }); });
+  const down = await call('/api/settings/test', { url: `http://127.0.0.1:${closed}/v1`, chatModel: 'x' });
+  assert.equal(down.code, 'unreachable');
+  assert.match(down.error, new RegExp(`^Model sunucusuna ulaşılamadı\\..*\\(127\\.0\\.0\\.1:${closed}: bağlantı reddedildi`));
+});
+
 test('Atölye\'de tanımlı yerel model doğrudan kullanılır: adres, model ve anahtar her kullanımda Atölye kaydından okunur', async () => {
   const file = process.env.FIKIRHANE_ATOLYE_FILE;
   const write = (models) => fs.writeFileSync(file, JSON.stringify({ models }));
@@ -193,7 +228,7 @@ test('Atölye\'de tanımlı yerel model doğrudan kullanılır: adres, model ve 
   const kurum = { id: 'a1', name: 'Kurum', url: `${llmUrl}/gw/v2/chat/completions`, model: 'kurum-modeli', kind: 'openai', key: 'atolye-anahtari-1' };
   write([kurum, { id: 'a2', name: 'Claude uyumlu', url: llmUrl, model: 'antropik-model', kind: 'anthropic', key: 'atolye-anahtari-2' }, { id: 'a3', name: 'Bozuk', url: 'adres değil', model: 'x' }]);
   const cfg = await call('/api/config');
-  assert.deepEqual(cfg.atolye, [{ id: 'a1', name: 'Kurum', url: `${llmUrl}/gw/v2`, model: 'kurum-modeli', kind: 'openai', hasKey: true },
+  assert.deepEqual(cfg.atolye, [{ id: 'a1', name: 'Kurum', url: `${llmUrl}/gw/v2/chat/completions`, model: 'kurum-modeli', kind: 'openai', hasKey: true },
     { id: 'a2', name: 'Claude uyumlu', url: llmUrl, model: 'antropik-model', kind: 'anthropic', hasKey: true }]);
   assert.ok(!JSON.stringify(cfg).includes('atolye-anahtari'), 'anahtarlar arayüze gitmez');
   assert.equal((await call('/api/settings', { source: 'atolye', atolye: 'yok' })).code, 'no-atolye-model');

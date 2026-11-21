@@ -441,7 +441,7 @@ function renderSettings(note) {
       field('Şifreleme anahtarı', pass, 'API anahtarı dosyaya açık yazılmaz; bu anahtarla şifrelenir ve içe aktarırken aynı anahtar sorulur. Değiştirmezseniz anahtar "fikirhane" olur. Dosya Atölye\'de de içe aktarılabilir.'),
       el('div', { class: 'actions' }, el('button', { class: 'btn primary', type: 'button', text: 'Dosyayı indir', onclick: doExport }), close))
       : io.choose ? el('div', { class: 'card' },
-        el('p', { text: 'Dosyada birden çok model var. Fikirhane tek bir model kullanır; hangisi alınsın?' }),
+        el('p', { text: 'Dosyada birden çok model var. Fikirhane tek bir model kullanır; almak istediğinize tıklayın.' }),
         io.choose.map((m) => el('button', { type: 'button', class: 'source', onclick: () => doImport({ pick: m.i }) }, el('b', { text: m.name }), `${m.model} · ${m.url}${m.kind === 'anthropic' ? ' · Anthropic uyumlu' : ''}`)),
         el('div', { class: 'actions', style: 'margin-top:10px' }, close))
         : io.ask ? el('div', { class: 'card' },
@@ -449,17 +449,19 @@ function renderSettings(note) {
           el('div', { class: 'actions' }, el('button', { class: 'btn primary', type: 'button', text: 'İçe aktar', onclick: () => doImport() }), close))
           : null;
   fill($('#settingsBody'),
-    el('p', { text: 'Fikirhane bu bilgisayarda ya da yerel ağınızda çalışan bir dil modeli sunucusunu kullanır (Ollama, LM Studio, llama.cpp vb.). Belgeleriniz yalnızca yazdığınız adrese gider.' }),
+    el('p', { text: 'Fikirhane bu bilgisayarda ya da ağınızda çalışan bir dil modeli sunucusunu kullanır (Ollama, LM Studio, llama.cpp, kurum içi bir gateway vb.). Belgeleriniz yalnızca yazdığınız adrese gider.' }),
     atolye.length > 0 && field('Model kaynağı', source, 'Atölye\'de tanımlı bir yerel modeli seçerseniz adres, model ve API anahtarı her kullanımda Atölye\'nin kaydından okunur; Atölye\'de değiştirdiğinizde burada da değişir.'),
     src && el('div', { class: `result${picked?.gone ? ' err' : ''}`, text: picked?.gone || !picked ? 'Bu model Atölye\'de artık yok. Başka bir model seçin ya da sunucuyu elle girin.'
       : `Sunucu: ${picked.url} · Model: ${picked.model} · ${picked.kind === 'anthropic' ? 'Anthropic uyumlu' : 'OpenAI uyumlu'} · API anahtarı: ${picked.hasKey ? 'Atölye\'de kayıtlı' : 'yok'}` }),
-    !src && field('Sunucu adresi', url, 'Ollama: http://localhost:11434 · LM Studio: http://localhost:1234'),
+    !src && field('Sunucu adresi', url, 'Ollama: http://localhost:11434 · LM Studio: http://localhost:1234 · Kurum içi gateway: size verilen adres (ör. https://llm.sirket.com/v1; tam uç nokta, …/chat/completions, yazıldıysa olduğu gibi kullanılır)'),
     !src && field('Sohbet modeli', chat, 'Belgeyi okuyan ve soruları yanıtlayan model. "Bağlantıyı dene" sunucudaki modelleri listeye getirir.'),
     field('Embedding modeli (isteğe bağlı)', embed, src ? 'Anlamsal arama için; aynı sunucuda olmalıdır (ör. bge-m3). Boş bırakırsanız yalnızca kelime araması yapılır.' : 'Anlamsal arama için (ör. bge-m3, nomic-embed-text). Boş bırakırsanız yalnızca kelime araması yapılır.'),
     !src && field('API anahtarı (isteğe bağlı)', key),
     el('datalist', { id: 'modelList' }, (state.models || []).map((m) => el('option', { value: m }))),
     note && el('div', { class: `result ${note.kind}`, text: note.text }),
-    el('div', { class: 'actions' },
+    // Dışa/içe aktarma bölümü açıkken asıl düğmeler gösterilmez: "Kaydet" o sırada içe aktarmaz, üstteki (boş olabilen)
+    // formu kaydetmeye çalışır ve dosyayla ilgisi olmayan bir adres hatası verirdi
+    !io && el('div', { class: 'actions' },
       el('button', { class: 'btn', type: 'button', text: 'Bağlantıyı dene', onclick: async () => {
         keep(); renderSettings({ kind: '', text: 'Deneniyor… Model ilk kez yükleniyorsa bir dakika kadar sürebilir.' });
         const r = await api('/api/settings/test', body());

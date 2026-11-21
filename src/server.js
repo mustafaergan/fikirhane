@@ -17,11 +17,11 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
 const MAX_UPLOAD = 300 * 1024 * 1024;
 
 const MESSAGES = {
-  'bad-url': 'Geçerli bir adres girin (http://… ile başlamalı, ör. http://localhost:11434)',
-  'no-llm': 'Yerel model ayarlı değil. Ayarlar\'dan sunucu adresini ve sohbet modelini girin.',
+  'bad-url': 'Sunucu adresini yazın; http:// ya da https:// ile başlamalı (ör. http://localhost:11434 ya da https://llm.sirket.com/v1).',
+  'no-llm': 'Dil modeli ayarlı değil. Ayarlar\'dan sunucu adresini ve sohbet modelini girin.',
   'no-atolye-model': 'Seçili Atölye modeli bulunamadı; Atölye tarafında silinmiş olabilir. Ayarlar penceresinden yeniden seçin.',
   'no-embed': 'Anlamsal dizin için Ayarlar\'da bir embedding modeli seçin.',
-  'unreachable': 'Yerel model sunucusuna ulaşılamadı. Sunucunun çalıştığını ve adresi kontrol edin.',
+  'unreachable': 'Model sunucusuna ulaşılamadı. Adresi ve sunucunun çalıştığını kontrol edin; sunucu kurum ağındaysa bu bilgisayarın o ağa (gerekiyorsa VPN ile) bağlı olması gerekir.',
   'not-found': 'Bulunamadı.',
   'unsupported': 'Bu dosya türü desteklenmiyor. Desteklenenler: PDF, Word (.docx), metin, Markdown, HTML, CSV.',
   'no-text': 'Bu belgeden metin çıkarılamadı. Taranmış (resim) bir PDF olabilir; metin içeren bir sürümünü yükleyin.',

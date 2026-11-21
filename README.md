@@ -115,9 +115,20 @@ OpenAI uyumlu uç noktası olan herhangi bir yerel sunucu kullanılır: **Ollama
 **LM Studio** (`http://localhost:1234`), llama.cpp vb. Ayarlar'da (sol üstteki dişli) sunucu adresi, sohbet modeli ve
 isteğe bağlı embedding modeli (ör. `bge-m3`) girilir; "Bağlantıyı dene" sunucudaki modelleri listeler.
 
-Kurum içi bir gateway de kullanılabilir: adres tam uç nokta olarak (`https://gateway.example.com/api/v2/chat/completions`)
-ya da kök olarak yazılabilir; `/v1` dışındaki sürüm yolu korunur, API anahtarı `Authorization`, `api-key` ve `x-api-key`
-başlıklarında gönderilir.
+Sunucunun bu bilgisayarda olması gerekmez; kurum içi bir gateway de kullanılabilir. API anahtarı `Authorization`,
+`api-key` ve `x-api-key` başlıklarında gönderilir. Adres yazıldığı gibi saklanır; hangi uç noktaya gidileceği Atölye ile
+aynı kuralla bulunur (aynı kayıt iki uygulamada aynı adrese gider):
+
+| Yazılan adres | Sohbet isteğinin gittiği yer |
+|---|---|
+| `https://llm.sirket.com` ya da `…/v1` | `https://llm.sirket.com/v1/chat/completions` |
+| `https://llm.sirket.com/api/v2` | `https://llm.sirket.com/api/v2/chat/completions` |
+| `https://llm.sirket.com/gw/chat/completions` (tam uç nokta) | olduğu gibi; araya `/v1` eklenmez |
+
+Model listesi ve embedding aynı kökten sorulur (`…/models`, `…/embeddings`). Sunucuya ulaşılamazsa hata, hangi sunucunun
+neden yanıt vermediğini yazar; kurum ağındaki bir adres o ağa bağlı olmayan bilgisayardan denenirse "yanıt gelmedi" çıkar.
+0.7.2'den önce tam uç nokta adresiyle (sürüm yolu olmadan) içe aktarılmış bir ayar varsa dosyayı yeniden içe aktarın:
+eski sürüm adresi kırparak saklıyordu.
 
 **Atölye'deki modeller:** Bu bilgisayarda Atölye kuruluysa ve orada yerel model tanımlıysa Ayarlar'da "Model kaynağı"
 seçimi çıkar. Atölye'deki bir modeli seçtiğinizde adres, model ve API anahtarı her kullanımda Atölye'nin kaydından
@@ -160,7 +171,7 @@ npm test
 | `fikirhane.ps1 kaldir` | Kaldır; belgeler ve notlar (`~/.fikirhane`) yalnızca `-Veriler` ile silinir |
 
 Fikirhane açılışta, her sabah 9'da ve sayfa açıkken yarım saatte bir güncelleme denetler; yeni sürüm varsa sol altta
-bağlantı çıkar. Beklemeden denetlemek için sol alttaki sürüm yazısına ("Fikirhane 0.7.1") tıklayın. Depo okunamazsa
+bağlantı çıkar. Beklemeden denetlemek için sol alttaki sürüm yazısına ("Fikirhane 0.7.2" gibi) tıklayın. Depo okunamazsa
 (ağ henüz hazır değil, bilgisayar uykudan yeni uyandı) beş dakika sonra yeniden denenir; doğrudan erişim yoksa sürüm
 Windows'un ağ ayarlarıyla (tanımlı proxy dahil) sorulur. Ne olduğu `fikirhane.log` içindeki `[güncelleme]` satırında yazar.
 
