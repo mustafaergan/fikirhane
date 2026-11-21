@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fikirhane-senaryo-test-'));
@@ -310,4 +311,28 @@ test('site yeniden gezilince kayıt güncellenir: ekran numaraları, kullanıcı
   assert.deepEqual(lib.screens(id).screens.map((c) => [c.no, c.from, c.via]), [[2, null, ''], [3, 2, '"Üye ekle" düğmesi'], [5, 2, '"Raporlar" bağlantısı']]);
   assert.equal((await call(`/api/docs/${id}/screens/prune`, {})).removed, 0);
   assert.equal(lib.getScenario(id, direct).scenario.steps.length, 2, 'senaryolar silinmez');
+});
+
+test('kapı: açılışta kapi.json yazılır; soru başlığı gelen yanıt imzalanır, anahtar hiçbir yanıtta yer almaz', async () => {
+  const door = JSON.parse(fs.readFileSync(path.join(tmp, 'kapi.json'), 'utf8'));
+  assert.equal(door.app, 'fikirhane');
+  assert.equal(door.port, app.address().port);
+  assert.match(door.anahtar, /^[0-9a-f]{64}$/);
+  const ask = async (p, soru) => {
+    const r = await fetch(base + p, { headers: soru ? { 'x-fikirhane-soru': soru } : {} });
+    return { imza: r.headers.get('x-fikirhane-imza'), body: await r.text() };
+  };
+  const sign = (soru, p, body) => crypto.createHmac('sha256', door.anahtar).update([soru, `GET ${p}`, body].join('\n')).digest('hex');
+  const soru = crypto.randomBytes(16).toString('hex');
+  const a = await ask('/api/sites', soru);
+  assert.equal(a.imza, sign(soru, '/api/sites', a.body), 'imza soru + istek + gövde üzerinden');
+  assert.notEqual(a.imza, sign(soru, '/api/config', a.body), 'imza isteğin adresine bağlıdır');
+  // Hata yanıtları da imzalanır (ör. bulunamayan site)
+  const e = await ask('/api/sites/yok-boyle-site', soru);
+  assert.equal(JSON.parse(e.body).ok, false);
+  assert.equal(e.imza, sign(soru, '/api/sites/yok-boyle-site', e.body));
+  // Soru yoksa ya da biçimi bozuksa imza da yok
+  assert.equal((await ask('/api/sites')).imza, null);
+  assert.equal((await ask('/api/sites', 'kisa')).imza, null);
+  for (const p of ['/api/config', '/api/sites', `/api/sites/${site}`]) assert.ok(!(await ask(p, soru)).body.includes(door.anahtar), `${p} anahtarı sızdırmamalı`);
 });

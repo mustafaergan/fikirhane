@@ -48,6 +48,18 @@ kısa bir `text` bulunur:
 | `GET /api/sites/<kimlik>/screens/<no>` | Tek ekran: bütün alanlar, düğmeler, bağlantılar ve seçicileri |
 | `GET /api/sites/<kimlik>/route/<no>` | O ekrana gidiş: doğrudan adres ve kaydedilen tıklama zinciri (`page.goto(…)`, `page.getByRole(…).click()`) |
 
+**Atölye bağlantısı:** [Atölye](https://github.com/mustafaergan/atolye) 0.33.0'dan beri bu uçları kendi araçlarıyla
+kullanır (Atölye'de Bağlantılar > Fikirhane > Etkinleştir; adres ya da anahtar girilmez). Atölye'deki yapay zekâ
+tarayıcıyla iş yapmadan önce ekranı ve seçicileri Fikirhane'ye sorar, çok adımlı işi senaryo olarak kaydeder ve
+sonraki seferlerde tek çağrıyla çalıştırır. Deneme sitesinde ekranı bulma, seçicileri alma, 7 adımlı senaryoyu kaydetme
+ve gerçek Edge'de çalıştırma toplam yaklaşık 1.100 token'lık araç çıktısı tuttu; çalıştırma 1,7 saniye sürdü.
+
+**Kapı dosyası:** Fikirhane açılışta `~/.fikirhane/kapi.json` dosyasına dinlediği portu ve o açılışa özel rastgele bir
+anahtar yazar (kapanınca siler). Fikirhane'ye soran yerel araç isteğe `x-fikirhane-soru: <rastgele değer>` başlığı
+eklerse yanıt `x-fikirhane-imza` başlığıyla imzalanır: HMAC-SHA256(anahtar, soru + "\n" + "GET /yol" + "\n" + gövde).
+Böylece araç, aynı porta oturmuş başka bir programın yanıtını Fikirhane'ninki sanmaz; Atölye imzası tutmayan yanıtı
+kullanmaz, betiği çalıştırmaz. Anahtar hiçbir yanıtta yer almaz ve yalnızca dosyayı okuyabilen (aynı kullanıcı) bilir.
+
 Sorguyla yönlenen eski tip uygulamalarda (`index.php?action=liste`) `action`, `page`, `view`, `tab`, `sayfa`, `islem`
 gibi anahtarların kelime değerleri ekranı belirler; kimlikler `{id}` olur; diğer sorgu değerleri (arama metni vb.) atılır.
 
@@ -155,6 +167,7 @@ Her şey `~/.fikirhane` altında düz dosyalar olarak durur; elle okunup düzelt
 
 ```
 ~/.fikirhane/ayarlar.json                 yerel model sunucusu
+~/.fikirhane/kapi.json                    çalışırken: port ve o açılışa özel anahtar (yerel araçların doğrulaması için)
 ~/.fikirhane/belgeler/<kimlik>/meta.json   ad, sayfa sayısı, durum
                                asil.<uzantı>, sayfalar.json, parcalar.json, vektorler.bin
                                notlar.json, harita.md, sorular.json, yorumlar.json
@@ -175,6 +188,8 @@ düz metin durur ve arayüze geri gönderilmez.
 - Notlar ve yanıtlar modelin çıkarımıdır; hatalı olabilir. Önemli kararlarda kaynak sayfayı açın.
 - Site gezmede iç çerçeveler (iframe) ve kapalı gölge ağaçları okunmaz; erişilebilir adı olmayan düğmeler yalnızca
   sayılır. Arayüz değişince kartlar eskir: site yeniden gezilmelidir ("Yeniden gez" var olan kaydı günceller).
-- Atölye ile bağlantı henüz yoktur; önce Fikirhane kendi başına olgunlaştırılıyor.
+- Atölye bağlantısı deneme sitesinde uçtan uca denendi; gerçek bir kurumsal uygulamada (tek oturum açma, tek sayfalı
+  arayüzler) ve gerçek bir yapay zekâ oturumunda henüz denenmedi. Token kazancı ölçülmedi; yukarıdaki sayı yalnızca
+  araç çıktısının boyutudur.
 
 optona.tr tarafından yazılmıştır. MIT lisansı.

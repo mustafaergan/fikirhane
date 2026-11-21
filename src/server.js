@@ -2,6 +2,7 @@
 // Korumalar: başka bir alan adından (DNS yönlendirme) gelen istekler ve bir web sayfasının kullanıcı adına
 // gönderdiği istekler reddedilir (Host denetimi + değiştiren isteklerde özel başlık).
 import http from 'node:http';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -62,7 +63,22 @@ function readBody(req, limit) {
 
 export function createServer({ port = 3310, host = '127.0.0.1' } = {}) {
   const version = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
-  const send = (res, code, data) => { const body = JSON.stringify(data); res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(body); };
+  // Kapı anahtarı: Fikirhane'ye soran yerel araçlar (ör. Atölye) karşılarındakinin gerçekten bu kullanıcının Fikirhane'si
+  // olduğunu doğrulayabilsin diye. Her açılışta üretilir ve kullanıcının klasöründeki kapi.json dosyasına yazılır; aynı
+  // porta oturmuş başka bir program bu dosyayı okuyamaz. İstek "x-fikirhane-soru" başlığında rastgele bir değer gönderirse
+  // yanıt, o değer + istek + gövde üzerinden imzalanır ("x-fikirhane-imza"). Anahtar hiçbir yanıtta yer almaz.
+  const doorKey = crypto.randomBytes(32).toString('hex');
+  const doorFile = path.join(lib.home(), 'kapi.json');
+  const send = (res, code, data) => {
+    const body = JSON.stringify(data);
+    const head = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' };
+    const ask = res.req?.headers['x-fikirhane-soru'];
+    if (typeof ask === 'string' && /^[\w-]{16,128}$/.test(ask)) {
+      head['x-fikirhane-imza'] = crypto.createHmac('sha256', doorKey).update([ask, `${res.req.method} ${res.req.url}`, body].join('\n')).digest('hex');
+    }
+    res.writeHead(code, head);
+    res.end(body);
+  };
 
   // Süren gezinti: aynı site daha önce gezildiyse kayıtları da verilir (bitirirken "var olanı güncelle" seçeneği için)
   const tourView = () => { const t = gezgin.tourStatus(); return t ? { ...t, existing: lib.sitesAt(t.origin) } : null; };
@@ -167,5 +183,19 @@ export function createServer({ port = 3310, host = '127.0.0.1' } = {}) {
       if (!res.headersSent) send(res, 200, { ok: false, error: errorText(err), code: err.code || '' });
     }
   });
-  return new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, host, () => resolve(server)); });
+  // Kapanırken kapı dosyası silinir (başka bir Fikirhane örneği üzerine yazdıysa ona dokunulmaz)
+  server.on('close', () => {
+    try { if (JSON.parse(fs.readFileSync(doorFile, 'utf8')).anahtar === doorKey) fs.rmSync(doorFile, { force: true }); } catch { /* dosya yok */ }
+  });
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, host, () => {
+      try {
+        fs.mkdirSync(path.dirname(doorFile), { recursive: true });
+        const door = { app: 'fikirhane', surum: version, port: server.address().port, pid: process.pid, anahtar: doorKey };
+        fs.writeFileSync(doorFile, JSON.stringify(door, null, 2) + '\n', { mode: 0o600 });
+      } catch (err) { console.warn(`[kapı] kapi.json yazılamadı: ${err.message}`); }
+      resolve(server);
+    });
+  });
 }
