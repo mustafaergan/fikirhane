@@ -72,21 +72,42 @@ export async function chat({ url, key, kind, model, messages, temperature = 0.2,
   const send = (endpoint, body) => request(endpoint, { method: 'POST', key, timeoutMs, signal, body });
   // Bazı sunucular ve modeller temperature (ya da max_tokens) alanını reddeder: istek bu alan olmadan yinelenir
   const retry = async (first, second) => { try { return await first(); } catch (err) { if (err.status !== 400 && err.status !== 422) throw err; return second(); } };
-  let text;
-  if (kind === 'anthropic') {
-    const system = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
-    const body = { model, max_tokens: maxTokens, messages: messages.filter((m) => m.role !== 'system'), ...(system ? { system } : {}) };
-    const d = await retry(() => send(messagesUrl(url), { ...body, temperature }), () => send(messagesUrl(url), body));
-    text = Array.isArray(d?.content) ? d.content.filter((p) => p?.type === 'text').map((p) => p.text).join('') : null;
-    if (typeof text !== 'string' || (!text && !Array.isArray(d?.content))) throw fail('bad-response', JSON.stringify(d).slice(0, 200));
-  } else {
+  // Bir kez sorar: { text (görünen yanıt), cut (uzunluk sınırında kesildi), thought (model düşünme çıktısı üretti) }
+  const once = async (limit) => {
+    if (kind === 'anthropic') {
+      const system = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
+      const body = { model, max_tokens: limit, messages: messages.filter((m) => m.role !== 'system'), ...(system ? { system } : {}) };
+      const d = await retry(() => send(messagesUrl(url), { ...body, temperature }), () => send(messagesUrl(url), body));
+      if (!Array.isArray(d?.content)) throw fail('bad-response', JSON.stringify(d).slice(0, 200));
+      return visible(d.content.filter((p) => p?.type === 'text').map((p) => p.text).join(''), d.stop_reason === 'max_tokens', d.content.some((p) => /thinking/.test(p?.type || '')));
+    }
     const body = { model, messages, stream: false };
-    const d = await retry(() => send(chatUrl(url), { ...body, temperature, max_tokens: maxTokens }), () => send(chatUrl(url), body));
-    text = d?.choices?.[0]?.message?.content;
-    if (typeof text !== 'string') throw fail('bad-response', JSON.stringify(d).slice(0, 200));
+    const d = await retry(() => send(chatUrl(url), { ...body, temperature, max_tokens: limit }), () => send(chatUrl(url), body));
+    const choice = d?.choices?.[0];
+    const msg = choice?.message;
+    if (!msg || typeof msg !== 'object') throw fail('bad-response', JSON.stringify(d).slice(0, 200));
+    // Düşünen modellerde (qwen, deepseek, glm…) düşünme ayrı alanda gelir; ayrılan uzunluk düşünmeye yetmediyse content null olur
+    const content = Array.isArray(msg.content) ? msg.content.map((p) => (typeof p === 'string' ? p : p?.text || '')).join('') : typeof msg.content === 'string' ? msg.content : '';
+    return visible(content, choice.finish_reason === 'length', Boolean(msg.reasoning_content || msg.reasoning || d?.usage?.completion_tokens_details?.reasoning_tokens));
+  };
+  const id = `${chatUrl(url)}|${model}`;
+  let r = await once(thinkers.has(id) ? maxTokens + THINK_ROOM : maxTokens);
+  // Uzunluk sınırı düşünmeye de sayılır: düşünen model sınıra takıldıysa (yanıt boş ya da yarım) düşünme payı eklenip bir
+  // kez yeniden sorulur ve model anımsanır; sonraki sorular baştan o payla gider (her soru iki kez sorulmaz).
+  if (r.cut && (r.thought || !r.text) && !thinkers.has(id)) {
+    thinkers.add(id);
+    r = await once(maxTokens + THINK_ROOM);
   }
-  // Düşünen modellerin <think> bölümü yanıta alınmaz
-  return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+  if (!r.text) throw fail('empty-answer', r.cut ? 'yanıt uzunluğu düşünmeye yetmedi' : '');
+  return r.text;
+}
+// Düşünme payı (token) ve düşündüğü görülen modeller (sunucu + model). Fikirhane yeniden başlayınca liste sıfırlanır.
+const THINK_ROOM = 4096;
+const thinkers = new Set();
+/** Görünen yanıt: <think> bölümü (kesildiği için kapanmamış olsa da) yanıta alınmaz */
+function visible(content, cut, thought) {
+  const text = String(content || '').replace(/<think>[\s\S]*?(<\/think>|$)/g, '').trim();
+  return { text, cut: Boolean(cut), thought: Boolean(thought) || /<think>/.test(String(content || '')) };
 }
 
 /** Metinlerin embedding vektörleri (her biri Float32Array) */

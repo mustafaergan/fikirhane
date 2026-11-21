@@ -22,6 +22,8 @@ const MESSAGES = {
   'no-atolye-model': 'Seçili Atölye modeli bulunamadı; Atölye tarafında silinmiş olabilir. Ayarlar penceresinden yeniden seçin.',
   'no-embed': 'Anlamsal dizin için Ayarlar\'da bir embedding modeli seçin.',
   'unreachable': 'Model sunucusuna ulaşılamadı. Adresi ve sunucunun çalıştığını kontrol edin; sunucu kurum ağındaysa bu bilgisayarın o ağa (gerekiyorsa VPN ile) bağlı olması gerekir.',
+  'bad-response': 'Model sunucusu beklenmeyen bir yanıt verdi.',
+  'empty-answer': 'Model yanıt üretmedi. Düşünen bir modelse ayrılan yanıt uzunluğunu düşünmeye harcamış olabilir; sunucuda bu model için düşünme kapatılabiliyorsa kapatın ya da başka bir model seçin.',
   'not-found': 'Bulunamadı.',
   'unsupported': 'Bu dosya türü desteklenmiyor. Desteklenenler: PDF, Word (.docx), metin, Markdown, HTML, CSV.',
   'no-text': 'Bu belgeden metin çıkarılamadı. Taranmış (resim) bir PDF olabilir; metin içeren bir sürümünü yükleyin.',

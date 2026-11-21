@@ -130,6 +130,11 @@ neden yanıt vermediğini yazar; kurum ağındaki bir adres o ağa bağlı olmay
 0.7.2'den önce tam uç nokta adresiyle (sürüm yolu olmadan) içe aktarılmış bir ayar varsa dosyayı yeniden içe aktarın:
 eski sürüm adresi kırparak saklıyordu.
 
+**Düşünen modeller** (qwen, deepseek, glm gibi; yanıttan önce "düşünme" çıktısı üretenler): sunucular yanıt uzunluğu
+sınırını düşünmeye de sayar. Sınır düşünmeye yetmeyip yanıt boş ya da yarım dönerse Fikirhane düşünme payı (4096 token)
+ekleyip bir kez yeniden sorar ve o modeli anımsar; sonraki sorular baştan bu payla gider. Düşünme bölümü yanıta ve notlara
+alınmaz. Bu modellerde her soru daha uzun sürer; sunucuda düşünme kapatılabiliyorsa belge okuma belirgin hızlanır.
+
 **Atölye'deki modeller:** Bu bilgisayarda Atölye kuruluysa ve orada yerel model tanımlıysa Ayarlar'da "Model kaynağı"
 seçimi çıkar. Atölye'deki bir modeli seçtiğinizde adres, model ve API anahtarı her kullanımda Atölye'nin kaydından
 (`~/.atolye/yerel-llm.json`) okunur; Fikirhane'nin dosyasına yalnızca seçim yazılır, anahtar kopyalanmaz. Atölye'de

@@ -18,6 +18,7 @@ const seen = [];
 const gateway = [];
 const anthropic = [];
 const paths = []; // sahte modele gelen her isteğin yolu
+const thinking = []; // düşünen modellere gelen isteklerin uzunluk sınırı
 let llm; let app; let base; let llmUrl;
 before(async () => {
   llm = http.createServer((req, res) => {
@@ -33,6 +34,15 @@ before(async () => {
       if (j.model === 'kurum-modeli') gateway.push({ path: req.url, headers: req.headers, body: j });
       if (req.url.endsWith('/messages')) { anthropic.push({ path: req.url, headers: req.headers, body: j }); return res.end(JSON.stringify({ content: [{ type: 'text', text: 'Anthropic biçiminde yanıt' }] })); }
       if (req.url.endsWith('/embeddings')) return res.end(JSON.stringify({ data: j.input.map((t, index) => ({ index, embedding: [/iade/i.test(t) ? 1 : 0, /kargo/i.test(t) ? 1 : 0, 0.1] })) }));
+      // Düşünen modeller: uzunluk sınırı düşünmeye de sayılır; sınır küçükse görünen yanıt boş kalır
+      if (/^(dusunen|etiketli|sessiz)-model$/.test(j.model)) {
+        thinking.push({ model: j.model, max: j.max_tokens });
+        const roomy = j.max_tokens >= 2000;
+        const message = j.model === 'sessiz-model' ? { role: 'assistant', content: null }
+          : j.model === 'dusunen-model' ? { role: 'assistant', content: roomy ? 'Düşündüm: merhaba.' : null, refusal: null, reasoning_content: 'Kullanıcı selam verdi…' }
+            : { role: 'assistant', content: roomy ? '<think>tamamlanan düşünce</think>Etiketli yanıt.' : '<think>yarıda kesilen düşünce' };
+        return res.end(JSON.stringify({ id: 'chatcmpl-1', object: 'chat.completion', choices: [{ index: 0, message, finish_reason: roomy || j.model === 'sessiz-model' ? 'stop' : 'length' }] }));
+      }
       const system = j.messages[0].content;
       const user = j.messages.at(-1).content;
       seen.push({ system, user });
@@ -218,6 +228,32 @@ test('sunucu adresi Atölye ile aynı kuralla çözülür: tam uç nokta yazıld
   const down = await call('/api/settings/test', { url: `http://127.0.0.1:${closed}/v1`, chatModel: 'x' });
   assert.equal(down.code, 'unreachable');
   assert.match(down.error, new RegExp(`^Model sunucusuna ulaşılamadı\\..*\\(127\\.0\\.0\\.1:${closed}: bağlantı reddedildi`));
+});
+
+test('düşünen model: yanıt uzunluğu düşünmeye gidip içerik boş dönünce düşünme payıyla yeniden sorulur', async () => {
+  // Kurum gateway'indeki düşünen bir modelde "Bağlantıyı dene" (16 token) content: null alıyor ve ham JSON'u hata diye
+  // gösteriyordu. Artık pay eklenip bir kez yeniden sorulur; model anımsanır, sonraki sorular baştan payla gider.
+  const t = await call('/api/settings/test', { url: llmUrl, chatModel: 'dusunen-model' });
+  assert.deepEqual([t.ok, t.chat], [true, true], t.error);
+  assert.deepEqual(thinking.map((x) => x.max), [16, 16 + 4096]);
+  thinking.length = 0;
+  await call('/api/settings/test', { url: `${llmUrl}/v1`, chatModel: 'dusunen-model' });
+  assert.deepEqual(thinking.map((x) => x.max), [16 + 4096], 'aynı sunucu ve model ikinci kez iki defa sorulmaz');
+
+  // Düşünme <think> etiketiyle içerikte gelip yarıda kesilirse yarım düşünce yanıt sayılmaz
+  thinking.length = 0;
+  await call('/api/settings', { url: llmUrl, chatModel: 'etiketli-model' });
+  const up = await upload('dusunen.txt', 'İade süresi 14 gündür.');
+  const a = await call('/api/ask', { q: 'İade süresi kaç gün?', docs: [up.meta.id] });
+  assert.equal(a.answer, 'Etiketli yanıt.', a.error);
+  assert.deepEqual(thinking.map((x) => x.max), [1200, 1200 + 4096]);
+  await call(`/api/docs/${up.meta.id}`, null, 'DELETE');
+
+  // Hiç yanıt üretmeyen model: ham JSON yerine anlaşılır hata
+  const silent = await call('/api/settings/test', { url: llmUrl, chatModel: 'sessiz-model' });
+  assert.equal(silent.code, 'empty-answer');
+  assert.match(silent.error, /^Model yanıt üretmedi\./);
+  assert.ok(!silent.error.includes('chatcmpl'), 'ham yanıt hata metnine dökülmez');
 });
 
 test('Atölye\'de tanımlı yerel model doğrudan kullanılır: adres, model ve anahtar her kullanımda Atölye kaydından okunur', async () => {
