@@ -312,13 +312,82 @@ document.addEventListener('drop', (e) => { if (e.dataTransfer?.files?.length) up
 
 // ---------- Site gezintisi ----------
 // Ayrı bir tarayıcı penceresi açılır; kullanıcı gezer, her ekranın yapısı kart olarak kaydedilir, bitince belge olur.
-const tour = { data: null, browser: true, timer: null, note: null, url: '', limit: 30 };
+const tour = { data: null, browser: true, timer: null, note: null, url: '', limit: 30, goal: '', mode: 'emin-degilse', steps: 40, answers: {}, formOpen: false };
+// Model gezsin: siteyi dil modeli gezer; bilmediğini sorar. Onay kipleri sunucudaki kesif.js ile aynı adları taşır.
+const MODE_TEXT = { 'emin-degilse': 'Emin olmadığı düğmelerde sorsun (önerilen)', 'her-adim': 'Her adımda sorsun', serbest: 'Hiç sormasın (yalnızca deneme ortamında)' };
+const EXPLORE_INFO = 'Model ekranları dolaşır ve akışları çıkarır; giriş bilgisi ya da doldurulması gereken bir alan çıkınca size sorar. Verdiğiniz değerleri tarayıcıya Fikirhane yazar, modele göndermez. Sorulanlar bu site için kaydedilir ve bir daha sorulmaz (parola diske yazılmaz; yalnızca Fikirhane kapanana kadar bellekte tutulur). Model "Çıkış"a basmaz; silme, gönderme gibi işlemlerden ve ne yaptığı adından anlaşılmayan düğmelerden önce size sorar.';
+function exploreForm() {
+  const goal = el('textarea', { rows: '2', placeholder: 'Örn. "Rezervasyon arama ve ayrıntı ekranlarını çıkar". Boş bırakırsanız model ana ekranları ve temel işleri kendisi arar.' });
+  goal.value = tour.goal;
+  goal.oninput = () => { tour.goal = goal.value; };
+  const mode = el('select', {}, Object.entries(MODE_TEXT).map(([value, text]) => el('option', { value, text })));
+  mode.value = tour.mode;
+  mode.onchange = () => { tour.mode = mode.value; };
+  const steps = el('input', { type: 'number', class: 'short', min: '3', max: '150', title: 'Model en çok kaç adım atsın (3–150)' });
+  steps.value = tour.steps;
+  steps.oninput = () => { tour.steps = Number(steps.value) || 40; };
+  return [el('label', { class: 'field' }, el('span', { text: 'Modelin amacı (isteğe bağlı)' }), goal),
+    el('div', { class: 'row2' }, el('label', { class: 'field' }, el('span', { text: 'Onay' }), mode), el('label', { class: 'field' }, el('span', { text: 'En çok adım' }), steps))];
+}
+const exploreBody = () => ({ goal: tour.goal, mode: tour.mode, limit: tour.steps });
+// Modelin sorusu: alan değerleri (Fikirhane yazar), düz soru (yanıt modele gider) ya da bir tıklama için izin
+function pendingForm(p) {
+  const a = tour.answers[p.id] ||= { values: {}, text: '' };
+  const send = (body) => tourAct('/api/tour/explore/answer', { id: p.id, ...body });
+  if (p.kind === 'onay') {
+    return el('div', { class: 'ask' }, el('p', {}, el('b', { text: 'Model şunu yapmak istiyor: ' }), p.what),
+      el('p', { text: `${p.why}${p.remember ? ' Kararınız bu site için kaydedilir ve aynı düğme için yeniden sorulmaz.' : ''}` }),
+      el('div', { class: 'actions' }, el('button', { class: 'btn primary', type: 'button', text: 'İzin ver', onclick: () => send({ allow: true }) }), el('button', { class: 'btn', type: 'button', text: 'İzin verme', onclick: () => send({ allow: false }) })));
+  }
+  if (p.kind === 'soru') {
+    const text = el('textarea', { rows: '2', placeholder: 'Yanıtınız' });
+    text.value = a.text;
+    text.oninput = () => { a.text = text.value; };
+    return el('div', { class: 'ask' }, el('p', {}, el('b', { text: 'Model soruyor: ' }), p.soru), text,
+      el('p', { class: 'xnote', text: 'Yanıtınız modele gönderilir ve bu site için kaydedilir.' }),
+      el('div', { class: 'actions' }, el('button', { class: 'btn primary', type: 'button', text: 'Yanıtla', onclick: () => send({ text: a.text }) }), el('button', { class: 'btn', type: 'button', text: 'Yanıtlama', onclick: () => send({ skip: true }) })));
+  }
+  const submit = () => send({ values: a.values });
+  return el('div', { class: 'ask' }, el('p', {}, el('b', { text: 'Model bu bilgileri istiyor: ' }), p.soru),
+    p.again && el('p', { class: 'xnote', text: 'Kayıtlı yanıt bu gezintide kullanıldı ama işe yaramamış görünüyor; doğrusunu yazın.' }),
+    p.fields.map((f) => {
+      const input = f.options?.length ? el('select', {}, el('option', { value: '', text: '(seçin)' }), f.options.map((o) => el('option', { value: o, text: o })))
+        : el('input', { type: f.secret ? 'password' : 'text', spellcheck: 'false', autocomplete: 'off' });
+      input.value = a.values[f.no] || '';
+      input.oninput = () => { a.values[f.no] = input.value; };
+      input.onchange = input.oninput;
+      input.onkeydown = (e) => { if (e.key === 'Enter') submit(); };
+      return el('label', { class: 'field' }, el('span', { text: `${f.name}${f.required ? ' (zorunlu)' : ''}${f.secret ? ' · kaydedilmez, modele gönderilmez' : ''}` }), input);
+    }),
+    el('p', { class: 'xnote', text: 'Değerleri tarayıcıya Fikirhane yazar; modele gönderilmez. Parola dışındakiler bu site için kaydedilir.' }),
+    el('div', { class: 'actions' }, el('button', { class: 'btn primary', type: 'button', text: 'Doldur ve devam et', onclick: submit }),
+      el('button', { class: 'btn', type: 'button', text: 'Tarayıcıda kendim yaptım', title: 'Açık tarayıcı penceresinde bu adımı (ör. girişi) kendiniz yapın, sonra buna basın', onclick: () => send({ manual: true }) }),
+      el('button', { class: 'btn ghost', type: 'button', text: 'Bu bilgiyi verme', onclick: () => send({ skip: true }) })));
+}
+function explorePanel(t) {
+  const x = t.explore;
+  if (!x) return null;
+  const p = x.running ? x.pending : null;
+  const KIND = { 'uyarı': 'warn', 'akış': 'flow', ekran: 'flow' };
+  const head = x.running ? (p ? 'Model sizden yanıt bekliyor' : `Model geziyor: ${x.done}/${x.limit} adım. Bu sırada tarayıcı penceresine dokunmayın.`) : x.state === 'hata' ? 'Model gezintisi durdu' : `Model gezintisi bitti (${x.done} adım)`;
+  const s = x.saved || { fields: [], questions: [], decisions: [] };
+  const savedN = s.fields.length + s.questions.length + s.decisions.length;
+  return el('div', { class: 'card explore' },
+    el('div', { class: 'working' }, x.running && !p && el('span', { class: 'spin' }), head),
+    x.error && el('div', { class: 'result err', text: x.error }),
+    !x.running && x.summary && el('div', { class: 'result', text: x.summary }),
+    x.log.length > 0 && el('div', { class: 'explore-log' }, x.log.slice(-12).map((e) => el('div', { class: `xl ${KIND[e.kind] || ''}` }, e.n ? el('b', { text: `${e.n}.` }) : null, `${e.text}${e.result ? ` ${e.result}` : ''}`))),
+    p && pendingForm(p),
+    x.flows.length > 0 && el('p', { text: `Çıkarılan akışlar: ${x.flows.map((f) => `${f.name} (${f.steps} adım${f.ok ? '' : '; senaryoya çevrilemez'})`).join('; ')}. Gezintiyi bitirince senaryo olarak kaydedilir.` }),
+    savedN > 0 && el('p', { class: 'xnote' }, `Bu site için kayıtlı: ${[s.fields.length && `${s.fields.length} alan (${s.fields.map((f) => f.name).join(', ')})`, s.questions.length && `${s.questions.length} soru`, s.decisions.length && `${s.decisions.length} düğme kararı`].filter(Boolean).join(', ')}. Model bunları yeniden sormaz. `,
+      el('button', { class: 'link', type: 'button', text: 'Unut', title: 'Bu site için kayıtlı yanıtları ve kararları siler', onclick: () => tourAct('/api/tour/explore/forget') })));
+}
 async function loadTour() {
   const r = await api('/api/tour');
   tour.data = r.tour || null;
   tour.browser = r.browser !== false;
   $('#siteBtn').querySelector('span').textContent = tour.data ? `Gezinti sürüyor · ${tour.data.count} ekran` : 'Site gez';
-  const typing = $('#tourBody').contains(document.activeElement) && document.activeElement.tagName === 'INPUT';
+  const typing = $('#tourBody').contains(document.activeElement) && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
   if ($('#tourDialog').open && !typing) renderTour();
   clearTimeout(tour.timer);
   if (tour.data?.state === 'açık') tour.timer = setTimeout(loadTour, 1500);
@@ -338,13 +407,21 @@ function renderTour() {
     url.onkeydown = (e) => { if (e.key === 'Enter') start(); };
     fill($('#tourBody'),
       el('p', { text: 'Fikirhane ayrı bir tarayıcı penceresi açar. Orada giriş yapın ve tanıtmak istediğiniz ekranları gezin: her ekranın yapısı (başlıklar, alanlar, düğmeler, bağlantılar) kaydedilir. Sonra bu bilgi sorularınıza ve tarayıcı testlerine kaynak olur.' }),
-      el('p', { text: 'Alanlara yazdıklarınız, parolanız ve tablolardaki veriler kaydedilmez. Fikirhane hiçbir düğmeye basmaz, hiçbir formu göndermez. Tarayıcı geçici bir profille açılır; gezinti bitince oturum bilgisi silinir.' }),
+      el('p', { text: 'Alanlara yazdıklarınız, parolanız ve tablolardaki veriler kaydedilmez. Siz gezerken Fikirhane hiçbir düğmeye basmaz, hiçbir formu göndermez. Tarayıcı geçici bir profille açılır; gezinti bitince oturum bilgisi silinir.' }),
       el('label', { class: 'field' }, el('span', { text: 'Site adresi' }), url),
       !tour.browser && el('div', { class: 'result err', text: 'Bu bilgisayarda Microsoft Edge ya da Google Chrome bulunamadı.' }),
       note,
-      el('div', { class: 'actions' }, el('button', { class: 'btn primary', type: 'button', text: 'Tarayıcıyı aç', disabled: !tour.browser, onclick: start })));
+      el('div', { class: 'actions', style: 'margin-bottom:14px' }, el('button', { class: 'btn primary', type: 'button', text: 'Tarayıcıyı aç (ben gezeceğim)', disabled: !tour.browser, onclick: start })),
+      el('div', { class: 'card' }, el('h3', { text: 'Model gezsin' }),
+        el('p', { text: `Siteyi sizin yerinize ${state.config.settings.ready ? `${state.config.settings.chatModel} modeli` : 'dil modeli'} gezer. ${EXPLORE_INFO}` }),
+        exploreForm(),
+        el('div', { class: 'actions' }, el('button', { class: 'btn primary', type: 'button', text: 'Model gezsin', disabled: !tour.browser || !state.config.settings.ready,
+          title: state.config.settings.ready ? 'Tarayıcı açılır ve model gezmeye başlar' : 'Önce Ayarlar\'dan bir dil modeli tanımlayın',
+          onclick: async () => { tour.note = { kind: '', text: 'Tarayıcı açılıyor…' }; renderTour(); await tourAct('/api/tour', { url: tour.url, explore: exploreBody() }); } }))));
     return;
   }
+  const x = t.explore;
+  const exploring = Boolean(x?.running);
   const open = t.state === 'açık';
   const crawling = t.crawl?.running;
   const limit = el('input', { type: 'number', class: 'short', min: '1', max: '200', title: 'En fazla kaç yeni ekran' });
@@ -370,7 +447,14 @@ function renderTour() {
       el('span', { text: t.origin }),
       el('span', { class: `badge${open ? ' ok' : ' warn'}`, text: open ? 'Tarayıcı açık' : 'Tarayıcı kapandı' })),
     t.error && el('div', { class: `result${open ? ' err' : ''}`, text: t.error }),
-    open && el('p', { text: 'Açılan tarayıcı penceresinde gezin; her yeni ekran kendiliğinden kaydedilir. Adres değişmeden açılan bir pencere ya da sekme listeye gelmediyse "Bu ekranı kaydet"e basın.' }),
+    open && !exploring && el('p', { text: 'Açılan tarayıcı penceresinde gezin; her yeni ekran kendiliğinden kaydedilir. Adres değişmeden açılan bir pencere ya da sekme listeye gelmediyse "Bu ekranı kaydet"e basın.' }),
+    explorePanel(t),
+    open && !exploring && !crawling && tour.formOpen && el('div', { class: 'card' }, el('h3', { text: 'Modele gezdir' }),
+      el('p', { text: `Model, tarayıcının o an bulunduğu ekrandan devam eder (girişi kendiniz yaptıysanız yeniden sormaz). ${EXPLORE_INFO}` }),
+      exploreForm(),
+      el('div', { class: 'actions' }, el('button', { class: 'btn primary', type: 'button', text: 'Başlat', disabled: !state.config.settings.ready, title: state.config.settings.ready ? null : 'Önce Ayarlar\'dan bir dil modeli tanımlayın',
+        onclick: async () => { const r = await tourAct('/api/tour/explore', exploreBody()); if (r.ok) { tour.formOpen = false; renderTour(); } } }),
+      el('button', { class: 'btn ghost', type: 'button', text: 'Vazgeç', onclick: () => { tour.formOpen = false; renderTour(); } }))),
     t.crawl && el('div', { class: 'working' }, crawling && el('span', { class: 'spin' }),
       `Otomatik gezinti${crawling ? '' : ' bitti'}: ${t.crawl.done} adres gezildi, ${t.crawl.added} yeni ekran${crawling ? `, ${t.crawl.queued} sırada` : ''}${t.crawl.skipped ? `. ${t.crawl.skipped} bağlantı güvenlik için atlandı (çıkış, silme, indirme).` : '.'}`),
     el('div', { class: 'screen-list' }, t.cards.length
@@ -378,8 +462,10 @@ function renderTour() {
       : el('div', { class: 'list-empty', text: 'Henüz ekran yok. Sayfa yüklenince ilk ekran buraya gelir.' })),
     note,
     el('div', { class: 'actions' },
-      open && !crawling && el('button', { class: 'btn', type: 'button', text: 'Bu ekranı kaydet', onclick: async () => { const r = await tourAct('/api/tour/capture'); if (r.ok && !r.added) { tour.note = { kind: '', text: r.no ? `Bu ekran zaten kayıtlı (Ekran ${r.no}).` : 'Bu sayfa kaydedilmedi (başka bir sitede ya da boş).' }; renderTour(); } } }),
-      open && !crawling && [el('button', { class: 'btn', type: 'button', text: 'Bağlantıları otomatik gez', title: 'Kaydedilen ekranlardaki bağlantıların adresine gider; düğmelere basmaz. Çıkış, silme ve indirme bağlantıları atlanır. Bu sırada tarayıcı penceresine dokunmayın.', onclick: () => tourAct('/api/tour/crawl', { limit: tour.limit }) }), limit],
+      exploring && el('button', { class: 'btn', type: 'button', text: 'Modeli durdur', onclick: () => tourAct('/api/tour/explore/stop') }),
+      open && !crawling && !exploring && !tour.formOpen && el('button', { class: 'btn', type: 'button', text: 'Modele gezdir', title: 'Buradan sonrasını dil modeli gezsin: ekranları dolaşır, akışları çıkarır, bilmediğini size sorar', onclick: () => { tour.formOpen = true; renderTour(); } }),
+      open && !crawling && !exploring && el('button', { class: 'btn', type: 'button', text: 'Bu ekranı kaydet', onclick: async () => { const r = await tourAct('/api/tour/capture'); if (r.ok && !r.added) { tour.note = { kind: '', text: r.no ? `Bu ekran zaten kayıtlı (Ekran ${r.no}).` : 'Bu sayfa kaydedilmedi (başka bir sitede ya da boş).' }; renderTour(); } } }),
+      open && !crawling && !exploring && [el('button', { class: 'btn', type: 'button', text: 'Bağlantıları otomatik gez', title: 'Kaydedilen ekranlardaki bağlantıların adresine gider; düğmelere basmaz. Çıkış, silme ve indirme bağlantıları atlanır. Bu sırada tarayıcı penceresine dokunmayın.', onclick: () => tourAct('/api/tour/crawl', { limit: tour.limit }) }), limit],
       crawling && el('button', { class: 'btn', type: 'button', text: 'Durdur', onclick: () => tourAct('/api/tour/stop') }),
       el('span', { class: 'spacer' }),
       cancel,
@@ -503,7 +589,33 @@ const openSettings = async () => {
   if ($('#settingsDialog').open && !state.draft && !state.io && !$('#settingsBody').contains(document.activeElement)) renderSettings();
 };
 $('#settingsBtn').onclick = openSettings;
-$('#llmChip').onclick = openSettings;
+// Model etiketi: Atölye'de tanımlı modeller varsa Ayarlar'a girmeden aralarında geçilir; yoksa doğrudan Ayarlar açılır
+function closeModelMenu() { $('#modelMenu')?.remove(); document.removeEventListener('click', closeModelMenu); }
+async function openModelMenu(e) {
+  e?.stopPropagation();
+  if ($('#modelMenu')) return closeModelMenu();
+  const c = await api('/api/config'); // Atölye'deki liste bu arada değişmiş olabilir
+  if (c.settings) { state.config = c; renderChip(); }
+  const s = state.config.settings;
+  const list = state.config.atolye || [];
+  const own = s.source ? s.manual : s; // elle girilmiş sunucu
+  if (!list.length) return openSettings();
+  const choose = async (body) => {
+    closeModelMenu();
+    const r = await api('/api/settings', { ...body, embedModel: s.embedModel });
+    if (r.ok) { state.config.settings = r.settings; renderChip(); render(); } else alert(r.error);
+  };
+  const item = (label, sub, on, pick) => el('button', { type: 'button', class: `mm-item${on ? ' on' : ''}`, onclick: on ? closeModelMenu : pick }, el('span', { class: 'mm-name', text: label }), sub && el('span', { class: 'mm-sub', text: sub }));
+  const menu = el('div', { id: 'modelMenu', class: 'model-menu', role: 'menu' },
+    el('div', { class: 'mm-title', text: 'Kullanılacak model' }),
+    list.map((m) => item(m.name, m.model !== m.name ? m.model : 'Atölye', s.source === 'atolye' && s.atolye === m.id, () => choose({ source: 'atolye', atolye: m.id }))),
+    own?.url && own?.chatModel && item(own.chatModel, 'elle girilen sunucu', !s.source, () => choose({ url: own.url, chatModel: own.chatModel })),
+    el('button', { type: 'button', class: 'mm-item mm-more', text: 'Ayarlar…', onclick: () => { closeModelMenu(); openSettings(); } }));
+  menu.onclick = (ev) => ev.stopPropagation();
+  $('#llmChip').after(menu);
+  setTimeout(() => document.addEventListener('click', closeModelMenu), 0);
+}
+$('#llmChip').onclick = openModelMenu;
 $('#settingsClose').onclick = () => $('#settingsDialog').close();
 $('#pageClose').onclick = () => $('#pageDialog').close();
 for (const d of document.querySelectorAll('dialog')) d.addEventListener('click', (e) => { if (e.target === d) d.close(); });

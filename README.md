@@ -99,7 +99,34 @@ sitesinde 8 adımlı bir senaryo gerçek Edge ile 0,4 saniyede yürüdü; sonuç
   alanlarına sabit değer yazılamaz (senaryo dosyada açık durur): `{{parola}}` gibi bir değişken kullanılır ve değer
   çalıştırırken `FIKIRHANE_VAR_PAROLA` ile verilir. Senaryolar yalnızca kendi sitesinin adreslerine gidebilir.
 
-Güvenli sınırlar:
+### Model gezsin
+
+Siteyi kendiniz gezmek yerine dil modeline gezdirebilirsiniz: "Site gez" penceresinde **Model gezsin** (ya da kendiniz
+giriş yaptıktan sonra açık gezintide **Modele gezdir**). Fikirhane tarayıcıyı açar; model her adımda ekrandaki öğelerin
+numaralı listesini görür ve tek bir eylem seçer (tıkla, yaz, seç, Enter, sor, "akış tamam", bitir). Fikirhane eylemi
+uygular, gördüğü ekranları kart olarak kaydeder ve modelin baştan sona tamamladığını söylediği işleri **senaryo** olarak
+saklar. Pencerede modelin adımları canlı görünür; istediğiniz an durdurabilirsiniz.
+
+- **Bilmediğini sorar.** Giriş bilgisi ya da doldurulması gereken bir alan çıkınca model sizden ister. Değerleri
+  tarayıcıya Fikirhane yazar; **modele gönderilmez**. Parola türündeki alanı model hiçbir koşulda kendi dolduramaz.
+  Model düz bir soru da sorabilir ("hangi müşteriyle deneyeyim?"); o yanıt modele verilir.
+- **Sorulanlar kaydedilir.** Verdiğiniz alan değerleri, düz soruların yanıtları ve düğme kararları siteye göre
+  `~/.fikirhane/gezgin-yanitlar.json` dosyasında durur; aynı sitede bir daha sorulmaz. **Parola diske yazılmaz**: yalnızca
+  sorulduğu kaydedilir, değeri Fikirhane kapanana kadar bellekte tutulur. Pencerede "Unut" hepsini siler.
+- **Riskli adımda izin ister.** "Çıkış" görünümlü öğelere hiç basmaz, sitenin dışına çıkmaz. Silme, onaylama, gönderme,
+  indirme gibi işlemlerden önce her seferinde; ne yaptığı adından anlaşılmayan düğmelerden ("Kaydet" gibi) önce bir kez
+  sorar ve kararı anımsar. Gezinme, arama, sekme ve menüler sorulmaz. Onay kipi değiştirilebilir: her adımda sorsun ya da
+  hiç sormasın (yalnızca deneme ortamı için; "Çıkış" yine atlanır).
+- **Akışlar senaryo olur.** Sizin verdiğiniz değerler senaryoda değişken olarak durur (`{{kullanici_adi}}`,
+  `{{parola}}`); modelin kendi yazdığı deneme değerleri (arama metni gibi) olduğu gibi kalır. Tablo satırına tıklanan ya da
+  tarayıcıda elle yaptığınız bir adım içeren akış senaryoya çevrilemez; bu söylenir.
+- Model ekranın yapısını görür (başlıklar, alan ve düğme adları, uyarı metinleri); alanların içeriği ve tablo
+  satırlarındaki veriler gönderilmez. Ekrandaki metin modele "veri" olarak verilir; yine de model yanılabilir, bu yüzden
+  ilk denemeleri bir deneme ortamında yapın ve varsayılan onay kipini açık tutun.
+- Küçük modeller adım seçmekte zorlanabilir: model üç kez üst üste anlaşılır bir eylem üretmezse ya da ilerleme olmazsa
+  gezinti kendiliğinden durur. Her adım bir model çağrısıdır; düşünen modellerde adım başına süre uzar.
+
+Güvenli sınırlar (siz gezerken ve otomatik bağlantı gezintisinde):
 
 - Fikirhane **hiçbir düğmeye basmaz, hiçbir formu göndermez**. Otomatik gezinti yalnızca aynı sitedeki bağlantıların
   adresine gider; çıkış, silme, onay, indirme gibi görünen bağlantıları ve dosyaları atlar. Yine de adresine gidilince
@@ -140,7 +167,8 @@ seçimi çıkar. Atölye'deki bir modeli seçtiğinizde adres, model ve API anah
 (`~/.atolye/yerel-llm.json`) okunur; Fikirhane'nin dosyasına yalnızca seçim yazılır, anahtar kopyalanmaz. Atölye'de
 modeli ya da anahtarı değiştirdiğinizde Fikirhane'de hiçbir şey yapmanız gerekmez; model Atölye'den silinirse Fikirhane
 bunu söyler. Atölye'de Anthropic uyumlu olarak kayıtlı sunucular da kullanılır (sohbet `/v1/messages` ile). Embedding
-modeli Atölye'de tanımlanmadığı için Fikirhane'de yazılır ve aynı sunucuda olmalıdır.
+modeli Atölye'de tanımlanmadığı için Fikirhane'de yazılır ve aynı sunucuda olmalıdır. Atölye modelleri arasında
+Ayarlar'a girmeden geçmek için sol alttaki model etiketine tıklayın: liste açılır, seçtiğiniz model hemen kullanılır.
 
 **Dışa / içe aktarma:** Ayarlar'daki "Dışa aktar" yerel model ayarını `fikirhane-yerel-llm.json` dosyasına yazar; API
 anahtarı dosyada açık durmaz, yazdığınız şifreleme anahtarıyla (AES-256-GCM) şifrelenir ve "İçe aktar" aynı anahtarı
@@ -187,6 +215,7 @@ Her şey `~/.fikirhane` altında düz dosyalar olarak durur; elle okunup düzelt
 ```
 ~/.fikirhane/ayarlar.json                 yerel model sunucusu
 ~/.fikirhane/kapi.json                    çalışırken: port ve o açılışa özel anahtar (yerel araçların doğrulaması için)
+~/.fikirhane/gezgin-yanitlar.json         "Model gezsin" sırasında sorulanlar ve yanıtlarınız, siteye göre (parola değeri yazılmaz)
 ~/.fikirhane/belgeler/<kimlik>/meta.json   ad, sayfa sayısı, durum
                                asil.<uzantı>, sayfalar.json, parcalar.json, vektorler.bin
                                notlar.json, harita.md, sorular.json, yorumlar.json
@@ -207,6 +236,8 @@ düz metin durur ve arayüze geri gönderilmez.
 - Notlar ve yanıtlar modelin çıkarımıdır; hatalı olabilir. Önemli kararlarda kaynak sayfayı açın.
 - Site gezmede iç çerçeveler (iframe) ve kapalı gölge ağaçları okunmaz; erişilebilir adı olmayan düğmeler yalnızca
   sayılır. Arayüz değişince kartlar eskir: site yeniden gezilmelidir ("Yeniden gez" var olan kaydı günceller).
+- "Model gezsin" küçük bir deneme sitesinde ve senaryolu bir sahte modelle denendi; gerçek bir modelin gerçek bir kurumsal
+  uygulamada ne kadar iyi gezdiği (tek oturum açma, tek sayfalı arayüzler, karmaşık formlar) henüz bilinmiyor.
 - Atölye bağlantısı deneme sitesinde uçtan uca denendi; gerçek bir kurumsal uygulamada (tek oturum açma, tek sayfalı
   arayüzler) ve gerçek bir yapay zekâ oturumunda henüz denenmedi. Token kazancı ölçülmedi; yukarıdaki sayı yalnızca
   araç çıktısının boyutudur.

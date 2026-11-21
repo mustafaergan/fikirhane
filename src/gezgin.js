@@ -3,7 +3,7 @@
 // Ek kütüphane kullanmaz: tarayıcı --remote-debugging-pipe ile başlatılır ve DevTools protokolü süreç borusundan
 // konuşulur; açık bir hata ayıklama kapısı olmadığı için bilgisayardaki başka bir program araya giremez.
 //
-// Sınırlar (bilerek):
+// Sınırlar (bilerek; tek istisna kullanıcının açıkça başlattığı "Model gezsin" kipidir, kuralları kesif.js başında):
 //   - Hiçbir düğmeye basılmaz, hiçbir form gönderilmez. Otomatik gezinti yalnızca aynı sitedeki bağlantıların
 //     adresine gider; çıkış, silme, indirme gibi görünen bağlantılar atlanır.
 //   - Alanlara yazılan değerler ve tablo satırlarındaki veriler okunmaz; kartta yalnızca yapı (etiketler) durur.
@@ -55,7 +55,7 @@ export function cleanUrl(url) {
   const u = new URL(url);
   return u.origin + u.pathname + joinQuery(query(u).filter((q) => q.kind !== 'data').map((q) => `${encodeURIComponent(q.key)}=${encodeURIComponent(q.value)}`)) + routeHash(u);
 }
-const DANGER = /(çıkış|cikis|oturumu kapat|log-?out|sign-?out|\bsil\b|silin|delete|remove|kaldır|iptal|cancel|onayla|approve|reddet|reject|gönder|export|dışa aktar|indir|download|yazdır|print)/i;
+export const DANGER = /(çıkış|cikis|oturumu kapat|log-?out|sign-?out|\bsil\b|silin|delete|remove|kaldır|iptal|cancel|onayla|approve|reddet|reject|gönder|export|dışa aktar|indir|download|yazdır|print)/i;
 const FILE = /\.(pdf|zip|rar|7z|xlsx?|docx?|pptx?|csv|exe|msi|png|jpe?g|gif|svg|mp4|mp3)$/i;
 /** Otomatik gezintide gidilmeyecek bağlantı: adı ya da adresi değiştiren/sonlandıran bir işleme benziyor */
 export function dangerous(name, href) {
@@ -128,9 +128,45 @@ function pageLib() {
     const row = el.closest('[role="row"]');
     return Boolean(row && !row.querySelector('[role="columnheader"]'));
   };
+  const SEL = 'a[href], button, input, select, textarea, summary, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="checkbox"], [role="radio"], [role="switch"], [role="combobox"], [role="textbox"], [role="searchbox"], [contenteditable="true"]';
+  const findModal = () => [...document.querySelectorAll('dialog[open], [role="dialog"], [role="alertdialog"]')].filter(visible)
+    .filter((d) => d.getAttribute('aria-modal') === 'true' || (d.tagName === 'DIALOG' && d.matches(':modal'))).pop();
+  // Model gezerken (kesif.js): ekrandaki etkileşimli öğelerin numaralı listesi. Her öğe data-fk="<no>" ile işaretlenir;
+  // eylem o numarayla yapılır. Alanların değeri okunmaz (yalnızca dolu mu), tablo satırındaki bağlantının adı (veri) alınmaz.
+  const view = () => {
+    for (const e of document.querySelectorAll('[data-fk]')) e.removeAttribute('data-fk');
+    const modal = findModal();
+    const root = modal || document;
+    const out = { url: location.href, origin: location.origin, title: clean(document.title, 120), h1: '', dialog: '', headings: [], items: [], alerts: [] };
+    const h1 = [...document.querySelectorAll('h1')].find(visible);
+    out.h1 = h1 ? clean(textOf(h1)) : '';
+    out.headings = [...new Set([...root.querySelectorAll('h1, h2, h3, [role="heading"]')].filter(visible).map((h) => clean(textOf(h))).filter(Boolean))].slice(0, 8);
+    if (modal) out.dialog = labelled(modal) || out.headings[0] || 'pencere';
+    out.alerts = [...new Set([...root.querySelectorAll('[role="alert"], [role="status"], [aria-live="assertive"], .error, .alert, .invalid-feedback, .field-validation-error, .validation-summary-errors')]
+      .filter(visible).map((a) => clean(textOf(a), 160)).filter(Boolean))].slice(0, 4);
+    let no = 0;
+    for (const el of root.querySelectorAll(SEL)) {
+      if (out.items.length >= 300) break;
+      if ((el.tagName === 'INPUT' && el.type === 'hidden') || !visible(el)) continue;
+      const role = roleOf(el);
+      if (!role) continue;
+      const row = inRow(el);
+      const { name, how } = nameOf(el, role);
+      const kind = role === 'link' ? 'link' : ACTION.includes(role) ? 'button' : 'field';
+      if (kind === 'button' && !name) continue;
+      no++;
+      el.setAttribute('data-fk', String(no));
+      const type = kind !== 'field' ? '' : el.tagName === 'SELECT' ? 'select' : el.tagName === 'TEXTAREA' ? 'textarea' : el.tagName === 'INPUT' ? el.type : role;
+      out.items.push({ no, kind, role, row, name: row && kind === 'link' ? '' : name, locator: row ? '' : locatorOf(el, role, name, how),
+        href: kind === 'link' && typeof el.href === 'string' ? el.href : '', disabled: Boolean(el.disabled || el.getAttribute('aria-disabled') === 'true'), type,
+        required: kind === 'field' && Boolean(el.required || el.getAttribute('aria-required') === 'true'),
+        filled: kind === 'field' && (type === 'checkbox' || type === 'radio' ? Boolean(el.checked) : Boolean(el.isContentEditable ? clean(textOf(el)) : el.value)),
+        options: el.tagName === 'SELECT' ? [...el.options].slice(0, 12).map((o) => clean(o.textContent, 40)).filter(Boolean) : [] });
+    }
+    return out;
+  };
   const card = () => {
-    const modal = [...document.querySelectorAll('dialog[open], [role="dialog"], [role="alertdialog"]')].filter(visible)
-      .filter((d) => d.getAttribute('aria-modal') === 'true' || (d.tagName === 'DIALOG' && d.matches(':modal'))).pop();
+    const modal = findModal();
     const root = modal || document;
     const uniq = (list, max) => [...new Set(list.filter(Boolean))].slice(0, max);
     const out = { url: location.href, origin: location.origin, title: clean(document.title, 120), h1: '', dialog: '', headings: [], links: [], buttons: [], fields: [], columns: [], unnamed: 0 };
@@ -140,7 +176,6 @@ function pageLib() {
     out.h1 = h1 ? clean(textOf(h1)) : '';
     if (modal) out.dialog = labelled(modal) || out.headings[0] || 'pencere';
     out.columns = uniq([...root.querySelectorAll('th, [role="columnheader"]')].filter(visible).map((h) => clean(textOf(h), 40)), 30);
-    const SEL = 'a[href], button, input, select, textarea, summary, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="checkbox"], [role="radio"], [role="switch"], [role="combobox"], [role="textbox"], [role="searchbox"], [contenteditable="true"]';
     for (const el of root.querySelectorAll(SEL)) {
       if (out.links.length + out.buttons.length + out.fields.length >= 400) break;
       if ((el.tagName === 'INPUT' && el.type === 'hidden') || !visible(el)) continue;
@@ -163,14 +198,17 @@ function pageLib() {
     return out;
   };
   const clicked = (el) => { const role = roleOf(el); const row = inRow(el); return { role, row, name: row ? '' : nameOf(el, role).name }; };
-  return { card, clicked };
+  return { card, clicked, view };
 }
 /** Sayfada çalışan kart çıkarıcının kaynağı: senaryo betikleri kaldıkları ekranı aynı kodla özetler */
 export const PAGE_CARD = `(${pageLib})().card()`;
 // Sayfa durulana kadar (öğe sayısı değişmeyene kadar, en çok ~5 sn) beklenir, sonra kart çıkarılır
-const EXTRACT = `(async () => { await new Promise((done) => { let last = -1, same = 0, n = 0; const t = setInterval(() => {
+const settled = (what) => `(async () => { await new Promise((done) => { let last = -1, same = 0, n = 0; const t = setInterval(() => {
   const c = document.getElementsByTagName('*').length; same = c === last && document.readyState === 'complete' ? same + 1 : 0; last = c;
-  if (same >= 2 || ++n > 24) { clearInterval(t); done(); } }, 200); }); return (${pageLib})().card(); })()`;
+  if (same >= 2 || ++n > 24) { clearInterval(t); done(); } }, 200); }); return (${pageLib})().${what}(); })()`;
+const EXTRACT = settled('card');
+/** Sayfa durulduktan sonra numaralı öğe listesi (model gezintisi için) */
+export const PAGE_VIEW = settled('view');
 // Kullanıcının tıkladığı öğenin rolü ve adı (yazdıkları değil) Fikirhane'ye bildirilir: "bu ekrana nasıl gelindi"
 const WATCH = `(() => { if (window.__fikirhaneIz) return; window.__fikirhaneIz = true; const F = (${pageLib})();
   addEventListener('click', (e) => { try {
@@ -467,6 +505,12 @@ function onEvent(tour, msg) {
     if (!crawling) later(1200); // adres değişmeden açılan pencere ya da sekme de ayrı bir durum olarak kaydedilir
   } else if (msg.method === 'Page.javascriptDialogOpening' && crawling) {
     tour.cdp.send('Page.handleJavaScriptDialog', { accept: false }, s.id).catch(() => {});
+  } else if (msg.method === 'Page.javascriptDialogOpening' && tour.explore?.running) {
+    // Model gezerken tarayıcının kendi penceresi (alert/confirm) akışı kilitlemesin: bilgi penceresi kapatılır, onay ve
+    // soru pencereleri reddedilir; ne çıktığı modele bildirilir.
+    const accept = msg.params.type === 'alert' || msg.params.type === 'beforeunload';
+    tour.cdp.send('Page.handleJavaScriptDialog', { accept }, s.id).catch(() => {});
+    tour.explore.dialog = `tarayıcı penceresi çıktı (${msg.params.type === 'alert' ? 'bilgi; kapatıldı' : 'onay; reddedildi'}): "${S(msg.params.message, 160)}"`;
   }
 }
 
@@ -503,6 +547,7 @@ export async function startTour({ url, headless = process.env.FIKIRHANE_GEZGIN_G
     tour.state = 'kapandı';
     if (why) tour.error = why;
     if (tour.crawl) tour.crawl.running = false;
+    tour.explore?.stop('Tarayıcı kapandı.');
     tour.cdp.close();
     for (const s of tour.sessions.values()) clearTimeout(s.timer);
     // Geçici profil (çerezler, oturum) silinir; tarayıcı dosyaları bırakana kadar birkaç kez denenir
@@ -548,8 +593,16 @@ export function tourStatus() {
   if (!t) return null;
   return { id: t.id, origin: t.origin, state: t.state, error: t.error, count: t.cards.length,
     cards: t.cards.slice(-60).map((c) => ({ no: c.no, title: c.title, path: c.path, via: c.via, fields: c.fields.length, buttons: c.buttons.length, links: c.links.length })),
-    crawl: t.crawl ? { running: t.crawl.running, done: t.crawl.done, queued: t.crawl.queue.length, added: t.crawl.added, skipped: t.crawl.skipped } : null };
+    crawl: t.crawl ? { running: t.crawl.running, done: t.crawl.done, queued: t.crawl.queue.length, added: t.crawl.added, skipped: t.crawl.skipped } : null,
+    explore: t.explore ? t.explore.view() : null };
 }
+/** Model gezintisi (kesif.js) için iç kapı: açık gezinti, ekran kaydı ve o an kullanılan sekme */
+export const _gezi = {
+  open: () => open(),
+  active: () => active,
+  capture: (tour, s, opt) => capture(tour, s, opt),
+  session: (tour) => (tour.last && tour.sessions.has(tour.last.id) ? tour.last : tour.main),
+};
 
 /** Kullanıcının o an baktığı ekranı kaydeder (adres değişmeden açılan durumlar için) */
 export async function captureNow() {
@@ -603,14 +656,17 @@ export async function finishTour() {
   const t = need();
   if (!t.cards.length) throw fail('no-screens');
   if (t.crawl) { t.crawl.running = false; await Promise.race([t.crawl.promise, sleep(20_000)]); }
+  if (t.explore) { t.explore.stop(); await Promise.race([t.explore.promise, sleep(5000)]); }
   await closeTour(t);
   active = null;
-  return { origin: t.origin, start: cleanUrl(t.start), cards: t.cards };
+  // flows: modelin gezerken çıkardığı akışlar (senaryo adımları); kitaplık bunları senaryo olarak saklar
+  return { origin: t.origin, start: cleanUrl(t.start), cards: t.cards, flows: t.explore ? t.explore.flows : [] };
 }
 export async function cancelTour() {
   const t = active;
   if (!t) return;
   if (t.crawl) t.crawl.running = false;
+  t.explore?.stop();
   await closeTour(t);
   active = null;
 }

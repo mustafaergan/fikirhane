@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import * as lib from './library.js';
 import * as llm from './llm.js';
 import * as gezgin from './gezgin.js';
+import * as kesif from './kesif.js';
 import { checkUpdate, applyUpdate } from './update.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -39,6 +40,8 @@ const MESSAGES = {
   'browser-failed': 'Tarayıcı başlatılamadı.',
   'tour-busy': 'Zaten süren bir gezinti var. Önce onu bitirin ya da ondan vazgeçin.',
   'no-tour': 'Süren bir gezinti yok.',
+  'no-question': 'Bu soru artık beklemiyor (yanıtlanmış ya da gezinti durmuş).',
+  'explore-busy': 'Model zaten geziyor ya da otomatik gezinti sürüyor. Önce onu durdurun.',
   'tour-closed': 'Tarayıcı penceresi kapanmış. Kaydedilen ekranları "Bitir ve kaydet" ile saklayabilirsiniz.',
   'no-name': 'Senaryoya bir ad verin.',
   'no-steps': 'Senaryoda en az bir adım olmalı.',
@@ -84,6 +87,23 @@ export function createServer({ port = 3310, host = '127.0.0.1' } = {}) {
 
   // Süren gezinti: aynı site daha önce gezildiyse kayıtları da verilir (bitirirken "var olanı güncelle" seçeneği için)
   const tourView = () => { const t = gezgin.tourStatus(); return t ? { ...t, existing: lib.sitesAt(t.origin) } : null; };
+  // Model gezintisinde kullanılacak model: o anki ayar (Atölye modeli seçiliyse oradan). Ayarlı değilse anlaşılır hata.
+  const explorer = () => {
+    const cfg = lib.settings();
+    if (!cfg.url || !cfg.chatModel) throw Object.assign(new Error('no-llm'), { code: cfg.missing ? 'no-atolye-model' : 'no-llm' });
+    return (messages, signal) => llm.chat({ url: cfg.url, key: cfg.key, kind: cfg.kind, model: cfg.chatModel, messages, maxTokens: 500, timeoutMs: 180_000, signal });
+  };
+  const explore = (body = {}) => { const x = kesif.startExplore({ goal: body.goal, limit: body.limit, mode: body.mode, ask: explorer() }); console.log(`[keşif] başladı: en çok ${x.limit} adım, kip ${x.mode}`); };
+  // Modelin çıkardığı akışlar senaryo olarak saklanır; saklanamayan (seçicisi olmayan adım, tarayıcıda elle yapılan adım) söylenir
+  const saveFlows = (siteId, flows = []) => {
+    const saved = []; const skipped = [];
+    for (const f of flows) {
+      if (!f.ok) { skipped.push(`${f.name} (seçicisi bulunamayan ya da elle yapılan adım var)`); continue; }
+      try { saved.push(lib.saveScenario(siteId, { name: f.name, description: f.summary, steps: f.steps }).scenario.name); } catch (err) { skipped.push(`${f.name} (${errorText(err)})`); }
+    }
+    if (saved.length || skipped.length) console.log(`[keşif] ${saved.length} akış senaryo olarak kaydedildi, ${skipped.length} kaydedilemedi`);
+    return [saved.length && `Modelin çıkardığı ${saved.length} akış senaryo olarak kaydedildi: ${saved.join(', ')}.`, skipped.length && `Senaryoya çevrilemeyen akışlar: ${skipped.join('; ')}.`].filter(Boolean).join(' ');
+  };
   const routes = [
     ['GET', /^\/api\/config$/, async () => ({ app: 'fikirhane', version, settings: lib.publicSettings(), atolye: lib.atolyeList(), home: lib.home() })],
     ['POST', /^\/api\/settings$/, async (_m, body) => ({ ok: true, settings: lib.saveSettings(body) })],
@@ -130,7 +150,18 @@ export function createServer({ port = 3310, host = '127.0.0.1' } = {}) {
     ['GET', /^\/api\/sites\/([\w-]+)\/scenarios\/([\w-]+)\/script$/, async (m, _b, _u, req) => lib.scriptOf(m[1], m[2], { base: `http://${req.headers.host}`, version })],
     ['POST', /^\/api\/sites\/([\w-]+)\/scenarios\/([\w-]+)\/result$/, async (m, body) => { const r = lib.recordRun(m[1], m[2], body); console.log(`[senaryo] ${m[2]}: ${r.status}${r.changed ? `, Ekran ${r.changed} değişmiş` : ''}`); return { ok: true, ...r }; }],
     ['GET', /^\/api\/tour$/, async () => ({ tour: tourView(), browser: Boolean(gezgin.findBrowser()) })],
-    ['POST', /^\/api\/tour$/, async (_m, body) => { await gezgin.startTour({ url: body.url }); console.log('[gezinti] başladı'); return { ok: true, tour: tourView() }; }],
+    ['POST', /^\/api\/tour$/, async (_m, body) => {
+      if (body.explore) explorer(); // model ayarlı değilse tarayıcı açılmadan söylenir
+      await gezgin.startTour({ url: body.url });
+      console.log('[gezinti] başladı');
+      if (body.explore) explore(body.explore);
+      return { ok: true, tour: tourView() };
+    }],
+    // Model gezsin: dil modeli açık gezintide ekranları kendisi dolaşır; bilmediğini kullanıcıya sorar (bkz. kesif.js)
+    ['POST', /^\/api\/tour\/explore$/, async (_m, body) => { explore(body); return { ok: true, tour: tourView() }; }],
+    ['POST', /^\/api\/tour\/explore\/answer$/, async (_m, body) => { kesif.answerExplore(body); return { ok: true, tour: tourView() }; }],
+    ['POST', /^\/api\/tour\/explore\/stop$/, async () => { kesif.stopExplore(); return { ok: true, tour: tourView() }; }],
+    ['POST', /^\/api\/tour\/explore\/forget$/, async () => { const t = gezgin.tourStatus(); if (t) kesif.forgetAnswers(t.origin); return { ok: true, tour: tourView() }; }],
     ['POST', /^\/api\/tour\/capture$/, async () => ({ ok: true, ...await gezgin.captureNow(), tour: tourView() })],
     ['POST', /^\/api\/tour\/crawl$/, async (_m, body) => { gezgin.crawlTour({ limit: body.limit }); return { ok: true, tour: tourView() }; }],
     ['POST', /^\/api\/tour\/stop$/, async () => { gezgin.stopCrawl(); return { ok: true, tour: tourView() }; }],
@@ -139,10 +170,15 @@ export function createServer({ port = 3310, host = '127.0.0.1' } = {}) {
       const t = gezgin.tourStatus();
       if (body.update && t && !lib.sitesAt(t.origin).some((x) => x.id === body.update)) throw Object.assign(new Error('other-site'), { code: 'other-site' });
       const done = await gezgin.finishTour();
-      if (body.update) { const r = lib.updateSite(body.update, done); console.log(`[gezinti] kayıt güncellendi: ${r.added} yeni, ${r.revised} değişen, ${r.unseen} görülmeyen ekran`); return { ok: true, updated: true, meta: r.meta, text: r.text }; }
+      if (body.update) {
+        const r = lib.updateSite(body.update, done);
+        console.log(`[gezinti] kayıt güncellendi: ${r.added} yeni, ${r.revised} değişen, ${r.unseen} görülmeyen ekran`);
+        return { ok: true, updated: true, meta: r.meta, text: [r.text, saveFlows(r.meta.id, done.flows)].filter(Boolean).join('\n') };
+      }
       const meta = lib.addSite(done);
       console.log(`[gezinti] bitti: ${meta.pages} ekran, ${meta.chunks} parça`);
-      return { ok: true, meta };
+      const flows = saveFlows(meta.id, done.flows);
+      return { ok: true, meta, ...(flows ? { text: flows } : {}) };
     }],
     ['POST', /^\/api\/docs\/([\w-]+)\/screens\/prune$/, async (m) => ({ ok: true, ...lib.pruneScreens(m[1]) })],
     ['POST', /^\/api\/tour\/cancel$/, async () => { await gezgin.cancelTour(); return { ok: true }; }],
