@@ -67,6 +67,17 @@ OpenAI uyumlu uç noktası olan herhangi bir yerel sunucu kullanılır: **Ollama
 **LM Studio** (`http://localhost:1234`), llama.cpp vb. Ayarlar'da (sol üstteki dişli) sunucu adresi, sohbet modeli ve
 isteğe bağlı embedding modeli (ör. `bge-m3`) girilir; "Bağlantıyı dene" sunucudaki modelleri listeler.
 
+Kurum içi bir gateway de kullanılabilir: adres tam uç nokta olarak (`https://gateway.example.com/api/v2/chat/completions`)
+ya da kök olarak yazılabilir; `/v1` dışındaki sürüm yolu korunur, API anahtarı `Authorization`, `api-key` ve `x-api-key`
+başlıklarında gönderilir.
+
+**Dışa / içe aktarma:** Ayarlar'daki "Dışa aktar" yerel model ayarını `fikirhane-yerel-llm.json` dosyasına yazar; API
+anahtarı dosyada açık durmaz, yazdığınız şifreleme anahtarıyla (AES-256-GCM) şifrelenir ve "İçe aktar" aynı anahtarı
+sorar. Yanlış anahtarla hiçbir şey değişmez. Dosya biçimi Atölye'ninkiyle ortaktır: Atölye'den dışa aktarılan yerel model
+dosyası Fikirhane'de, Fikirhane'ninki Atölye'de içe aktarılabilir. Fikirhane tek model kullandığı için dosyada birden çok
+model varsa hangisinin alınacağı sorulur. Şifreleme anahtarını değiştirmezseniz herkesçe bilinen varsayılan (`fikirhane`)
+kullanılır; bu gizlilik sağlamaz, yalnızca dosyada açık anahtar durmasını önler.
+
 Model tanımlı değilken de belge yüklenir ve içinde arama yapılır; anlamlandırma ve soru yanıtlama model ister.
 
 ## Kurulum
