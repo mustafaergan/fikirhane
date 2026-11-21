@@ -37,6 +37,14 @@ const MESSAGES = {
   'tour-busy': 'Zaten süren bir gezinti var. Önce onu bitirin ya da ondan vazgeçin.',
   'no-tour': 'Süren bir gezinti yok.',
   'tour-closed': 'Tarayıcı penceresi kapanmış. Kaydedilen ekranları "Bitir ve kaydet" ile saklayabilirsiniz.',
+  'no-name': 'Senaryoya bir ad verin.',
+  'no-steps': 'Senaryoda en az bir adım olmalı.',
+  'too-many-steps': 'Senaryo çok uzun (en fazla 60 adım). Daha küçük senaryolara bölün.',
+  'too-many-scenarios': 'Bu site için çok fazla senaryo var (en fazla 40). Kullanılmayanları silin.',
+  'bad-step': 'Senaryo adımı geçersiz.',
+  'bad-locator': 'Seçici anlaşılamadı. Örnek: getByRole(\'button\', { name: \'Kaydet\' })',
+  'secret-literal': 'Parola alanına sabit değer yazılamaz (senaryo dosyada açık durur). Değer yerine {{parola}} gibi bir değişken kullanın; çalıştırırken FIKIRHANE_VAR_PAROLA ile verilir.',
+  'no-route': 'Bu ekrana gidiş yolundaki bir tıklamanın seçicisi bilinmiyor; senaryo üretilemedi.',
   'no-screens': 'Henüz hiç ekran kaydedilmedi. Açılan tarayıcıda siteyi gezin.',
 };
 const errorText = (err) => MESSAGES[err.code] ? `${MESSAGES[err.code]}${err.detail && err.code !== 'no-text' ? ` (${err.detail})` : ''}` : (err.detail || err.message);
@@ -92,6 +100,14 @@ export function createServer({ port = 3310, host = '127.0.0.1' } = {}) {
     ['GET', /^\/api\/sites\/([\w-]+)$/, async (m) => lib.siteOverview(m[1])],
     ['GET', /^\/api\/sites\/([\w-]+)\/screens\/(\d+)$/, async (m) => lib.siteScreen(m[1], m[2])],
     ['GET', /^\/api\/sites\/([\w-]+)\/route\/(\d+)$/, async (m) => lib.siteRoute(m[1], m[2])],
+    // Senaryolar: saklanır, Playwright betiği olarak verilir; betiği çalıştıran sonucu "result" ucuna bildirir
+    ['GET', /^\/api\/sites\/([\w-]+)\/scenarios$/, async (m) => lib.listScenarios(m[1])],
+    ['POST', /^\/api\/sites\/([\w-]+)\/scenarios$/, async (m, body) => { const r = lib.saveScenario(m[1], body); console.log(`[senaryo] kaydedildi: ${r.scenario.id} (${r.scenario.steps.length} adım)`); return { ok: true, ...r }; }],
+    ['POST', /^\/api\/sites\/([\w-]+)\/scenarios\/from-screen$/, async (m, body) => ({ ok: true, ...lib.scenarioFromScreen(m[1], body.no) })],
+    ['GET', /^\/api\/sites\/([\w-]+)\/scenarios\/([\w-]+)$/, async (m) => lib.getScenario(m[1], m[2])],
+    ['DELETE', /^\/api\/sites\/([\w-]+)\/scenarios\/([\w-]+)$/, async (m) => { lib.removeScenario(m[1], m[2]); return { ok: true }; }],
+    ['GET', /^\/api\/sites\/([\w-]+)\/scenarios\/([\w-]+)\/script$/, async (m, _b, _u, req) => lib.scriptOf(m[1], m[2], { base: `http://${req.headers.host}`, version })],
+    ['POST', /^\/api\/sites\/([\w-]+)\/scenarios\/([\w-]+)\/result$/, async (m, body) => { const r = lib.recordRun(m[1], m[2], body); console.log(`[senaryo] ${m[2]}: ${r.status}${r.changed ? `, Ekran ${r.changed} değişmiş` : ''}`); return { ok: true, ...r }; }],
     ['GET', /^\/api\/tour$/, async () => ({ tour: gezgin.tourStatus(), browser: Boolean(gezgin.findBrowser()) })],
     ['POST', /^\/api\/tour$/, async (_m, body) => { await gezgin.startTour({ url: body.url }); console.log('[gezinti] başladı'); return { ok: true, tour: gezgin.tourStatus() }; }],
     ['POST', /^\/api\/tour\/capture$/, async () => ({ ok: true, ...await gezgin.captureNow(), tour: gezgin.tourStatus() })],
@@ -124,7 +140,7 @@ export function createServer({ port = 3310, host = '127.0.0.1' } = {}) {
           const raw = method === 'GET' ? null : await readBody(req, 2 * 1024 * 1024);
           let body = {};
           if (raw?.length) { try { body = JSON.parse(raw.toString('utf8')); } catch { return send(res, 400, { ok: false, error: 'Geçersiz istek' }); } }
-          return send(res, 200, await fn(m, body, url));
+          return send(res, 200, await fn(m, body, url, req));
         }
         return send(res, 404, { ok: false, error: 'Bulunamadı' });
       }

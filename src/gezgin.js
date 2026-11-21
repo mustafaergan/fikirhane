@@ -47,7 +47,8 @@ export function screenPath(url) {
 export function urlPattern(url) {
   const u = new URL(url);
   const parts = (p) => p.split('/').map((s) => (ID_PART.test(s) ? '{id}' : s)).join('/');
-  return parts(u.pathname) + joinQuery(query(u).map((q) => (q.kind === 'route' ? `${q.key}=${q.value}` : q.kind === 'id' ? `${q.key}={id}` : q.key))) + parts(routeHash(u));
+  // Veri değerli sorgu anahtarları (arama, süzgeç, kaynak) ekranı değiştirmez: /liste ile /liste?q=… aynı ekrandır
+  return parts(u.pathname) + joinQuery(query(u).filter((q) => q.kind !== 'data').map((q) => (q.kind === 'route' ? `${q.key}=${q.value}` : `${q.key}={id}`))) + parts(routeHash(u));
 }
 /** Gidilebilir adres: ekranı seçen kelimeler ve kimlikler kalır, veri değerleri (arama metni vb.) atılır */
 export function cleanUrl(url) {
@@ -164,6 +165,8 @@ function pageLib() {
   const clicked = (el) => { const role = roleOf(el); const row = inRow(el); return { role, row, name: row ? '' : nameOf(el, role).name }; };
   return { card, clicked };
 }
+/** Sayfada çalışan kart çıkarıcının kaynağı: senaryo betikleri kaldıkları ekranı aynı kodla özetler */
+export const PAGE_CARD = `(${pageLib})().card()`;
 // Sayfa durulana kadar (öğe sayısı değişmeyene kadar, en çok ~5 sn) beklenir, sonra kart çıkarılır
 const EXTRACT = `(async () => { await new Promise((done) => { let last = -1, same = 0, n = 0; const t = setInterval(() => {
   const c = document.getElementsByTagName('*').length; same = c === last && document.readyState === 'complete' ? same + 1 : 0; last = c;

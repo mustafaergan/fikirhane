@@ -1,13 +1,13 @@
 {
   "name": "fikirhane",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Büyük belgeleri ve web uygulamalarını yerel bir dil modeliyle okuyup anlamlandıran, onaylı bilgi notlarına çeviren ve soruları kaynak göstererek yanıtlayan yerel uygulama",
   "type": "module",
   "license": "MIT",
   "bin": { "fikirhane": "src/cli.js" },
   "scripts": {
     "start": "node src/cli.js",
-    "test": "node --test --test-force-exit test/text.test.mjs test/search.test.mjs test/app.test.mjs test/gezgin.test.mjs test/kurulum.test.mjs",
+    "test": "node --test --test-force-exit test/text.test.mjs test/search.test.mjs test/app.test.mjs test/gezgin.test.mjs test/senaryo.test.mjs test/kurulum.test.mjs",
     "paket": "node scripts/paket.mjs"
   },
   "engines": { "node": ">=18.18" },

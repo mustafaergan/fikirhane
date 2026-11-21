@@ -15,7 +15,8 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { extractPages, makeChunks, makeSections, extOf, SUPPORTED } from './text.js';
-import { buildIndex, bm25, cosineTop, fuse, tokens } from './search.js';
+import { buildIndex, bm25, cosineTop, fuse, tokens, fold } from './search.js';
+import { normalizeSteps, scenarioText, scenarioScript, scenarioVars, statusText, judgeRun, fileName, MAX_SCENARIOS } from './senaryo.js';
 import { cardText, cardChunks, commonLinks, screenGuide, routeTo } from './gezgin.js';
 import * as llm from './llm.js';
 
@@ -234,8 +235,9 @@ export function getDocument(id) {
   if (!meta) throw fail('not-found');
   let map = '';
   try { map = fs.readFileSync(path.join(dirOf(id), 'harita.md'), 'utf8'); } catch { /* henüz yok */ }
-  const list = meta.kind === 'site' ? part(id, 'ekranlar.json', []).map((c) => ({ no: c.no, title: c.title, path: c.path, from: c.from, via: c.via, fields: c.fields.length, buttons: c.buttons.length, links: c.links.length })) : undefined;
-  return { meta, map, notes: part(id, 'notlar.json', []), questions: part(id, 'sorular.json', []), comments: part(id, 'yorumlar.json', []), screens: list, job: jobs.get(id) || null };
+  const list = meta.kind === 'site' ? part(id, 'ekranlar.json', []).map((c) => ({ no: c.no, title: c.title, path: c.path, from: c.from, via: c.via, fields: c.fields.length, buttons: c.buttons.length, links: c.links.length, changed: Boolean(c.changed) })) : undefined;
+  return { meta, map, notes: part(id, 'notlar.json', []), questions: part(id, 'sorular.json', []), comments: part(id, 'yorumlar.json', []), screens: list,
+    scenarios: meta.kind === 'site' ? scenarios(id).map((x) => ({ ...scenInfo(x), text: scenarioText(x) })) : undefined, job: jobs.get(id) || null };
 }
 
 export function pageText(id, page) {
@@ -473,9 +475,10 @@ export function siteOverview(id) {
     `# ${siteLine(meta)}`,
     full.map && `## Harita\n${full.map.slice(0, 4000)}`,
     notes.length && `## Kullanıcının notları (ekran kartlarıyla çelişirse bunlar esas alınır)\n${notes.map((n) => `- ${n}`).join('\n').slice(0, 3000)}`,
-    `## Ekranlar\n${cards.map((c) => `${c.no}. ${c.title} — ${c.path}`).join('\n')}`,
+    `## Ekranlar\n${cards.map((c) => `${c.no}. ${c.title} — ${c.path}${c.changed ? ' (değişmiş görünüyor)' : ''}`).join('\n')}`,
+    scenarios(id).length && `## Senaryolar (kayıtlı, yeniden çalıştırılabilir)\n${scenarios(id).map(scenLine).join('\n')}`,
   ].filter(Boolean).join('\n\n');
-  return { site: siteInfo(meta), map: full.map, notes, screens: cards.map((c) => ({ no: c.no, title: c.title, path: c.path, url: c.url, dialog: c.dialog, from: c.from, via: c.via, iz: c.iz })), text };
+  return { site: siteInfo(meta), map: full.map, notes, screens: cards.map((c) => ({ no: c.no, title: c.title, path: c.path, url: c.url, dialog: c.dialog, from: c.from, via: c.via, iz: c.iz, changed: Boolean(c.changed) })), scenarios: scenarios(id).map(scenInfo), text };
 }
 
 /** Tek ekran: alanlar, düğmeler, bağlantılar ve seçicileri */
@@ -483,7 +486,10 @@ export function siteScreen(id, no) {
   const { cards } = site(id);
   const card = cards.find((c) => c.no === Number(no));
   if (!card) throw fail('not-found');
-  return { screen: card, text: screenGuide(card, cards) };
+  // Bir senaryo bu ekranda kaldıysa ve ekran karttan farklı çıktıysa: kart eskimiş olabilir, bunu soran da bilmeli
+  const stale = card.changed ? `\nUyarı: bu ekran ${card.changed.at.slice(0, 10)} tarihli bir çalıştırmada karttan farklı çıktı (arayüz değişmiş olabilir).`
+    + `${card.changed.added.length ? ` Yeni: ${card.changed.added.map((e) => `${e.kind} ${e.name}`).join('; ')}.` : ''}${card.changed.removed.length ? ` Artık yok: ${card.changed.removed.map((e) => `${e.kind} ${e.name}`).join('; ')}.` : ''}` : '';
+  return { screen: card, text: screenGuide(card, cards) + stale };
 }
 
 /** Bir ekrana gidiş yolu: doğrudan adres ve kaydedilen tıklama zinciri */
@@ -514,4 +520,95 @@ export async function siteFind(q, id) {
     ? results.map((r) => [`[${r.site}] Ekran ${r.no}: ${r.title} — ${r.dialog ? `${r.path} (açık pencere)` : r.url}`, ...r.elements.map((e) => `- ${e.kind} ${e.name}${e.locator ? `: ${e.locator}` : ''}`)].join('\n')).join('\n\n')
     : 'Eşleşen ekran bulunamadı.';
   return { results, text };
+}
+
+// ---------- Senaryolar: bir sitede adım adım yapılan işlerin saklanan tarifleri ----------
+// Senaryoyu test yapan araç (ör. Atölye'deki oturum) ya da kullanıcı kaydeder; Fikirhane denetler, saklar ve
+// Playwright betiğine çevirir. Betiği Fikirhane çalıştırmaz; çalıştıran sonucu bildirir (bkz. senaryo.js).
+const scenFile = (id) => path.join(dirOf(id), 'senaryolar.json');
+const scenarios = (id) => part(id, 'senaryolar.json', []).filter((x) => x && x.id && Array.isArray(x.steps));
+const scenInfo = (x) => ({ id: x.id, name: x.name, description: x.description || '', steps: x.steps.length, status: x.status || 'denenmedi', updated: x.updated, last: x.runs?.[0] || null, vars: scenarioVars(x.steps) });
+const scenLine = (x) => `- [${x.id}] ${x.name} (${x.steps.length} adım) — ${statusText(x)}`;
+
+export function listScenarios(id) {
+  site(id);
+  const all = scenarios(id);
+  return { scenarios: all.map(scenInfo), text: all.length ? all.map(scenLine).join('\n') : 'Bu site için kayıtlı senaryo yok.' };
+}
+export function getScenario(id, sid) {
+  site(id);
+  const x = scenarios(id).find((s) => s.id === sid);
+  if (!x) throw fail('not-found');
+  return { scenario: x, text: scenarioText(x) };
+}
+/** Senaryo ekler ya da günceller (kimlikle; kimlik yoksa aynı adlı senaryo güncellenir). Adımlar denetlenir. */
+export function saveScenario(id, { id: sid, name, description, steps } = {}) {
+  const { meta, cards } = site(id);
+  const title = line(name, 80);
+  if (!title) throw fail('no-name');
+  const clean = normalizeSteps(steps, { origin: meta.origin, cards });
+  const all = scenarios(id);
+  const now = new Date().toISOString();
+  let x = sid ? all.find((s) => s.id === String(sid)) : all.find((s) => fold(s.name) === fold(title));
+  if (sid && !x) throw fail('not-found');
+  if (x) {
+    // Adımlar değiştiyse eski sonuç artık bu senaryoyu anlatmaz
+    if (JSON.stringify(x.steps) !== JSON.stringify(clean)) x.status = 'denenmedi';
+    Object.assign(x, { name: title, description: line(description, 300), steps: clean, updated: now });
+  } else {
+    if (all.length >= MAX_SCENARIOS) throw fail('too-many-scenarios');
+    x = { id: `s${crypto.randomBytes(3).toString('hex')}`, name: title, description: line(description, 300), steps: clean, created: now, updated: now, status: 'denenmedi', runs: [] };
+    all.push(x);
+  }
+  writeJson(scenFile(id), all);
+  // Kartlarda bulunmayan seçiciler yanlış olmayabilir (kartlar her öğeyi içermez) ama denenmemiştir: söylenir
+  const known = new Set(cards.flatMap((c) => [...c.fields, ...c.buttons, ...c.links].map((e) => e.locator)).filter(Boolean));
+  const unknown = clean.filter((s) => s.locator && !known.has(s.locator) && !known.has(s.locator.replace(/\.(first|last)\(\)$|\.nth\(\d+\)$/, ''))).length;
+  return { scenario: x, text: `Kaydedildi.\n${scenarioText(x)}${unknown ? `\nNot: ${unknown} adımın seçicisi ekran kartlarında yok; çalıştırılarak doğrulanmalı.` : ''}` };
+}
+/** Bir ekrana gidişi (gezintide kaydedilen tıklama zinciri) senaryo olarak kaydeder */
+export function scenarioFromScreen(id, no) {
+  const { cards } = site(id);
+  const r = routeTo(cards, no);
+  if (!r) throw fail('not-found');
+  const target = cards.find((c) => c.no === r.target);
+  if (r.steps.some((s) => s.action === 'click' && !s.locator)) throw fail('no-route');
+  const steps = r.steps.map((s) => (s.action === 'goto' ? { do: 'goto', url: s.url } : { do: 'click', locator: s.locator, note: `Ekran ${s.screen}: ${s.title}` }));
+  const head = target.dialog || target.headings[0];
+  if (head) steps.push({ do: 'expect', text: head });
+  return saveScenario(id, { name: `${target.title} ekranına git`, description: 'Gezintide kaydedilen yoldan üretildi.', steps });
+}
+export function removeScenario(id, sid) {
+  site(id);
+  const all = scenarios(id);
+  if (!all.some((s) => s.id === sid)) throw fail('not-found');
+  writeJson(scenFile(id), all.filter((s) => s.id !== sid));
+}
+/** Senaryonun çalıştırılabilir Playwright betiği. base: betiğin sonucu bildireceği Fikirhane adresi. */
+export function scriptOf(id, sid, { base, version }) {
+  const { meta } = site(id);
+  const { scenario } = getScenario(id, sid);
+  const vars = scenarioVars(scenario.steps);
+  return { file: fileName(scenario), vars, script: scenarioScript({ site: meta, scenario, base, version }),
+    text: `Betik: ${fileName(scenario)} (${scenario.steps.length} adım). Çalıştırma: node ${fileName(scenario)}\nPlaywright klasörü FIKIRHANE_PLAYWRIGHT ile, oturum klasörü FIKIRHANE_PROFIL ile verilir.${vars.length ? `\nGerekli değişkenler: ${vars.map((v) => `FIKIRHANE_VAR_${v.toUpperCase()}`).join(', ')}` : ''}` };
+}
+/**
+ * Betiğin bildirdiği çalıştırma sonucunu kaydeder. Senaryo kaldıysa ve kaldığı ekran kartından farklıysa kart
+ * "değişmiş" olarak işaretlenir (kartın kendisi değiştirilmez; site yeniden gezilince güncellenir).
+ */
+export function recordRun(id, sid, result) {
+  const { meta, cards } = site(id);
+  const all = scenarios(id);
+  const x = all.find((s) => s.id === sid);
+  if (!x) throw fail('not-found');
+  const { run, changed, text } = judgeRun(x, result, { origin: meta.origin, cards });
+  x.runs = [run, ...(x.runs || [])].slice(0, 10);
+  x.status = run.ok ? 'geçti' : 'kaldı';
+  writeJson(scenFile(id), all);
+  if (changed) {
+    const card = cards.find((c) => c.no === changed.no);
+    card.changed = { at: changed.at, added: changed.added, removed: changed.removed };
+    writeJson(path.join(dirOf(id), 'ekranlar.json'), cards);
+  }
+  return { status: x.status, changed: changed ? changed.no : null, text };
 }

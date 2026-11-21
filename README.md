@@ -51,6 +51,27 @@ kısa bir `text` bulunur:
 Sorguyla yönlenen eski tip uygulamalarda (`index.php?action=liste`) `action`, `page`, `view`, `tab`, `sayfa`, `islem`
 gibi anahtarların kelime değerleri ekranı belirler; kimlikler `{id}` olur; diğer sorgu değerleri (arama metni vb.) atılır.
 
+### Senaryolar
+
+Senaryo, gezilmiş bir sitede adım adım yapılan bir işin ("yeni üye ekle") saklanan tarifidir. Bir kez yazılır, sonra
+Playwright betiği olarak yeniden oynatılır: yapay zekâ her adımda sayfaya bakmaz, yalnızca sonucu görür. Deneme
+sitesinde 8 adımlı bir senaryo gerçek Edge ile 0,4 saniyede yürüdü; sonuç tek satırdı.
+
+- Senaryoyu test yapan araç kaydeder (`POST /api/sites/<kimlik>/scenarios`) ya da "Ekranlar" sekmesindeki
+  "Senaryo yap" o ekrana gidişi senaryo olarak üretir. Adımlar: `goto`, `click`, `fill`, `select`, `check`, `uncheck`,
+  `press`, `expect`, `expectVisible`, `expectHidden`, `expectUrl`. Değerlerde `{{ad}}` biçiminde değişken kullanılır.
+- `GET …/scenarios/<senaryo>/script` tek başına çalışan betiği verir (`node senaryo-….mjs`; Playwright gerekir,
+  klasörü `FIKIRHANE_PLAYWRIGHT` ile verilir). **Fikirhane betiği kendisi çalıştırmaz**; yalnızca üretir.
+- Betik sonucu Fikirhane'ye bildirir. Kaldıysa kaldığı ekranın yapısı kartla karşılaştırılır ve yanıt hangisi olduğunu
+  söyler: arayüz değişmiş (yeni ve artık olmayan öğeler, seçicileriyle), ekran aynı (sorun seçicide ya da veride) ya da
+  beklenmeyen bir ekran. Değişen ekran kartta "değişmiş görünüyor" olarak işaretlenir.
+- Giriş gerektiren uygulamalarda `FIKIRHANE_PROFIL` ile kalıcı bir tarayıcı profili verilir; `--giris` ile bir kez
+  elle giriş yapılır, sonraki çalıştırmalar o oturumu kullanır.
+- Güvenlik: betik saklanan metinden değil denetlenmiş adımlardan üretilir. Seçiciler dar bir dilbilgisine göre
+  ayrıştırılıp yeniden yazılır, diğer bütün değerler metin sabiti olarak gömülür; bir senaryoya kod sokulamaz. Parola
+  alanlarına sabit değer yazılamaz (senaryo dosyada açık durur): `{{parola}}` gibi bir değişken kullanılır ve değer
+  çalıştırırken `FIKIRHANE_VAR_PAROLA` ile verilir. Senaryolar yalnızca kendi sitesinin adreslerine gidebilir.
+
 Güvenli sınırlar:
 
 - Fikirhane **hiçbir düğmeye basmaz, hiçbir formu göndermez**. Otomatik gezinti yalnızca aynı sitedeki bağlantıların
@@ -123,6 +144,7 @@ Her şey `~/.fikirhane` altında düz dosyalar olarak durur; elle okunup düzelt
                                asil.<uzantı>, sayfalar.json, parcalar.json, vektorler.bin
                                notlar.json, harita.md, sorular.json, yorumlar.json
                                ekranlar.json (yalnızca gezilen sitelerde: ekran kartları ve seçiciler)
+                               senaryolar.json (yalnızca gezilen sitelerde: senaryolar ve son çalıştırma sonuçları)
 ```
 
 ## Güvenlik

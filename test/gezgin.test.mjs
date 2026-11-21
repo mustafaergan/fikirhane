@@ -22,14 +22,15 @@ const noBrowser = gezgin.findBrowser() ? false : 'Edge ya da Chrome bulunamadı'
 
 test('adres kalıbı: kimlik görünümlü bölümler ve sorgu değerleri ekranı değiştirmez', () => {
   assert.equal(gezgin.urlPattern('https://uygulama.example.com/urun/12'), '/urun/{id}');
-  assert.equal(gezgin.urlPattern('https://uygulama.example.com/urun/57?sekme=fiyat&dil=tr'), '/urun/{id}?dil&sekme=fiyat', 'ekranı seçen sorgu kelimesi kalıba girer');
+  assert.equal(gezgin.urlPattern('https://uygulama.example.com/urun/57?sekme=fiyat&dil=tr'), '/urun/{id}?sekme=fiyat', 'ekranı seçen sorgu kelimesi kalıba girer, veri değerli anahtar girmez');
+  assert.equal(gezgin.urlPattern('https://uygulama.example.com/uyeler?q=ali&kaynak=liste'), gezgin.urlPattern('https://uygulama.example.com/uyeler'), 'arama ve süzgeç aynı ekrandır');
   assert.equal(gezgin.urlPattern('https://uygulama.example.com/kayit/3f2b8c1e-1a2b-4c3d-9e8f-001122334455/duzenle'), '/kayit/{id}/duzenle');
   assert.equal(gezgin.urlPattern('https://uygulama.example.com/#/siparis/8'), '/#/siparis/{id}');
   assert.equal(gezgin.urlPattern('https://uygulama.example.com/yardim#bolum-2'), '/yardim', 'sayfa içi çapa ekranı değiştirmez');
   assert.equal(gezgin.screenPath('https://uygulama.example.com/ara?q=gizli+arama&sayfa=2'), '/ara?q=…&sayfa={id}', 'arama metni karta yazılmaz');
   // Sorguyla yönlenen eski tip uygulamalar: ?action=liste ile ?action=duzenle ayrı ekranlardır
   const php = 'https://uygulama.example.com/index.php';
-  assert.equal(gezgin.urlPattern(`${php}?action=liste&q=kalem`), '/index.php?action=liste&q');
+  assert.equal(gezgin.urlPattern(`${php}?action=liste&q=kalem`), '/index.php?action=liste');
   assert.notEqual(gezgin.urlPattern(`${php}?action=liste`), gezgin.urlPattern(`${php}?action=duzenle`));
   assert.equal(gezgin.urlPattern(`${php}?action=duzenle&id=12`), gezgin.urlPattern(`${php}?action=duzenle&id=57`));
   assert.equal(gezgin.cleanUrl(`${php}?action=duzenle&id=12&q=gizli+arama#ust`), `${php}?action=duzenle&id=12`, 'gidilebilir adreste veri değeri kalmaz');

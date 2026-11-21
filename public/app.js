@@ -154,7 +154,7 @@ function renderDoc() {
     !llmReady && el('p', { style: 'margin:10px 0 0', text: 'Anlamlandırma ve soru yanıtlama için yerel model gerekir. Ayarlar\'dan (sol üstteki dişli) sunucu adresini ve modeli girin. Model olmadan da "Yalnızca ara" ile belgede arama yapabilirsiniz.' }));
   state.notice = null;
 
-  const TABS = [...(meta.kind === 'site' ? [['ekranlar', `Ekranlar (${state.doc.screens?.length || 0})`]] : []), ['harita', 'Harita'], ['notlar', `Bölüm notları (${notes.length})`], ['sorular', `Sorular (${answered}/${questions.length})`], ['yorumlar', `Notlarım (${comments.length})`]];
+  const TABS = [...(meta.kind === 'site' ? [['ekranlar', `Ekranlar (${state.doc.screens?.length || 0})`], ['senaryolar', `Senaryolar (${state.doc.scenarios?.length || 0})`]] : []), ['harita', 'Harita'], ['notlar', `Bölüm notları (${notes.length})`], ['sorular', `Sorular (${answered}/${questions.length})`], ['yorumlar', `Notlarım (${comments.length})`]];
   const tabs = el('div', { class: 'tabs' }, TABS.map(([id, name]) => el('button', { type: 'button', class: `tab${state.tab === id ? ' on' : ''}`, text: name, onclick: () => { state.tab = id; render(); } })));
   content.replaceChildren(head, tabs, ...tabBody());
 }
@@ -165,10 +165,43 @@ function tabBody() {
     return [
       el('p', { style: 'color:var(--text-2);font-size:13.5px;margin:0 0 10px', text: 'Gezinti sırasında kaydedilen ekranlar. Kartta ekranın yapısı durur: başlıklar, alanlar, düğmeler, bağlantılar. Alanlara yazılan değerler ve tablolardaki veriler kaydedilmez.' }),
       ...list.map((s) => el('div', { class: 'note' },
-        el('div', { class: 'note-head' }, el('span', { text: `Ekran ${s.no}` }), el('span', { class: 's-path', text: s.path }), el('button', { type: 'button', text: 'Kartı göster', onclick: () => showPage(meta.id, s.no, meta.name) })),
-        el('div', { text: s.title, style: 'font-weight:600' }),
+        el('div', { class: 'note-head' }, el('span', { text: `Ekran ${s.no}` }), el('span', { class: 's-path', text: s.path }),
+          el('button', { type: 'button', text: 'Senaryo yap', title: 'Bu ekrana gidişi (gezintide kaydedilen yol) yeniden çalıştırılabilir bir senaryo olarak kaydeder', onclick: async () => {
+            const r = await api(`/api/sites/${meta.id}/scenarios/from-screen`, { no: s.no });
+            if (r.ok) { state.tab = 'senaryolar'; await refreshDoc(); } else alertBox(r.error);
+          } }),
+          el('button', { type: 'button', text: 'Kartı göster', onclick: () => showPage(meta.id, s.no, meta.name) })),
+        el('div', { style: 'font-weight:600' }, s.title, s.changed && el('span', { class: 'badge warn', style: 'margin-left:8px;font-weight:400', title: 'Bir senaryo bu ekranda kaldı ve ekran karttan farklı çıktı; site yeniden gezilmeli', text: 'değişmiş görünüyor' })),
         el('div', { class: 's-via', text: [s.from || s.via ? `Geliş: ${[s.from && `Ekran ${s.from}`, s.via].filter(Boolean).join(' → ')}` : '', `${s.fields} alan`, `${s.buttons} düğme`, `${s.links} bağlantı`].filter(Boolean).join(' · ') }))),
     ];
+  }
+  if (state.tab === 'senaryolar') {
+    const list = state.doc.scenarios || [];
+    const BADGE = { 'geçti': ['ok', 'Geçti'], 'kaldı': ['warn', 'Kaldı'] };
+    return [
+      el('p', { style: 'color:var(--text-2);font-size:13.5px;margin:0 0 10px', text: 'Senaryo, bu uygulamada adım adım yapılan bir işin saklanan tarifidir. Test yapan araç (ör. Atölye) senaryoyu kaydeder ve sonraki seferlerde sayfayı yeniden keşfetmek yerine betiğini çalıştırır. Fikirhane betiği kendisi çalıştırmaz: üretir ve bildirilen sonucu kaydeder.' }),
+      ...list.map((s) => {
+        const [kind, label] = BADGE[s.status] || ['', 'Çalıştırılmadı'];
+        const del = el('button', { class: 'btn ghost', type: 'button', text: 'Sil' });
+        del.onclick = async () => {
+          if (!del.dataset.sure) { del.dataset.sure = '1'; del.textContent = 'Emin misiniz?'; del.classList.add('danger'); return; }
+          await api(`/api/sites/${meta.id}/scenarios/${s.id}`, null, 'DELETE'); refreshDoc();
+        };
+        return el('div', { class: 'note' },
+          el('div', { class: 'actions', style: 'margin-bottom:6px' }, el('b', { text: s.name }), el('span', { class: `badge ${kind}`, text: label }),
+            s.last && el('span', { class: 's-via', text: `${new Date(s.last.at).toLocaleString('tr-TR')}${s.last.ok ? ` · ${(s.last.ms / 1000).toFixed(1)} sn` : ''}` })),
+          s.description && el('div', { class: 's-via', text: s.description }),
+          el('pre', { class: 'steps-text', text: s.text.split('\n').filter((l) => /^\d+\. |^Değişkenler:/.test(l)).join('\n') }),
+          s.last && !s.last.ok && el('div', { class: 'result err', text: `Son çalıştırma ${s.last.step}. adımda kaldı: ${s.last.error || 'hata bildirilmedi'}` }),
+          el('div', { class: 'actions' },
+            el('button', { class: 'btn', type: 'button', text: 'Betiği indir', title: 'Playwright betiği (.mjs); çalıştırma bilgisi dosyanın başında yazar', onclick: async () => {
+              const r = await api(`/api/sites/${meta.id}/scenarios/${s.id}/script`);
+              if (r.script) download(r.file, r.script, 'text/javascript'); else alertBox(r.error);
+            } }),
+            el('span', { class: 'spacer' }), del));
+      }),
+      !list.length && el('div', { class: 'result', text: 'Henüz senaryo yok. "Ekranlar" sekmesindeki "Senaryo yap", o ekrana gidişi senaryo olarak kaydeder; daha uzun senaryoları test yapan araç kaydeder.' }),
+    ].filter(Boolean);
   }
   if (state.tab === 'harita') {
     if (!map) return [el('div', { class: 'result', text: meta.kind === 'site' ? 'Harita henüz çıkarılmadı. "Anlamlandır" ile yerel model ekran kartlarını okuyup uygulamanın haritasını (ekranlar, temel akışlar) çıkarır.' : 'Harita henüz çıkarılmadı. "Anlamlandır" ile yerel model belgeyi okuyup bir sayfalık haritasını çıkarır.' })];
@@ -425,12 +458,13 @@ function renderSettings(note) {
   // Bölüm pencerenin altında açılır: küçük pencerede de görünsün
   if (ioPanel) { ioPanel.scrollIntoView({ block: 'nearest' }); if (!io.choose) { pass.focus(); pass.select(); } }
 }
-function downloadJson(name, data) {
-  const a = el('a', { href: URL.createObjectURL(new Blob([`${JSON.stringify(data, null, 2)}\n`], { type: 'application/json' })), download: name });
+function download(name, text, type) {
+  const a = el('a', { href: URL.createObjectURL(new Blob([text], { type })), download: name });
   document.body.append(a);
   a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
+const downloadJson = (name, data) => download(name, `${JSON.stringify(data, null, 2)}\n`, 'application/json');
 function renderChip() {
   const s = state.config.settings;
   $('#llmChip').replaceChildren(el('span', { class: `dot ${s.ready ? 'ok' : 'warn'}` }),
