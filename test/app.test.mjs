@@ -11,10 +11,12 @@ import crypto from 'node:crypto';
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fikirhane-'));
 process.env.FIKIRHANE_HOME = tmp;
 process.env.FIKIRHANE_UPDATE_CHECK = '0';
+process.env.FIKIRHANE_ATOLYE_FILE = path.join(tmp, 'atolye-yerel-llm.json'); // gerçek ~/.atolye okunmaz
 const { createServer } = await import('../src/server.js');
 
 const seen = [];
 const gateway = [];
+const anthropic = [];
 let llm; let app; let base; let llmUrl;
 before(async () => {
   llm = http.createServer((req, res) => {
@@ -27,6 +29,7 @@ before(async () => {
       // "kurum-modeli" temperature alanını reddeden bir gateway gibi davranır
       if (j.model === 'kurum-modeli' && 'temperature' in j) { res.statusCode = 400; return res.end('{"error":"temperature desteklenmiyor"}'); }
       if (j.model === 'kurum-modeli') gateway.push({ path: req.url, headers: req.headers, body: j });
+      if (req.url.endsWith('/messages')) { anthropic.push({ path: req.url, headers: req.headers, body: j }); return res.end(JSON.stringify({ content: [{ type: 'text', text: 'Anthropic biçiminde yanıt' }] })); }
       if (req.url.endsWith('/embeddings')) return res.end(JSON.stringify({ data: j.input.map((t, index) => ({ index, embedding: [/iade/i.test(t) ? 1 : 0, /kargo/i.test(t) ? 1 : 0, 0.1] })) }));
       const system = j.messages[0].content;
       const user = j.messages.at(-1).content;
@@ -180,6 +183,54 @@ test('yerel model ayarı dışa ve içe aktarılır: API anahtarı şifrelidir; 
   // Anahtar boş bırakılınca aynı sunucuda korunur, başka bir sunucuya taşınmaz
   assert.equal((await call('/api/settings', { url: `${llmUrl}/gw/v2`, chatModel: 'kurum-modeli' })).settings.hasKey, true);
   assert.equal((await call('/api/settings', { url: 'http://127.0.0.1:9', chatModel: 'baska-model' })).settings.hasKey, false);
+});
+
+test('Atölye\'de tanımlı yerel model doğrudan kullanılır: adres, model ve anahtar her kullanımda Atölye kaydından okunur', async () => {
+  const file = process.env.FIKIRHANE_ATOLYE_FILE;
+  const write = (models) => fs.writeFileSync(file, JSON.stringify({ models }));
+  assert.deepEqual((await call('/api/config')).atolye, [], 'Atölye yoksa liste boştur');
+  await call('/api/settings', { url: llmUrl, chatModel: 'sohbet-modeli', key: 'kendi-anahtarim' });
+  const kurum = { id: 'a1', name: 'Kurum', url: `${llmUrl}/gw/v2/chat/completions`, model: 'kurum-modeli', kind: 'openai', key: 'atolye-anahtari-1' };
+  write([kurum, { id: 'a2', name: 'Claude uyumlu', url: llmUrl, model: 'antropik-model', kind: 'anthropic', key: 'atolye-anahtari-2' }, { id: 'a3', name: 'Bozuk', url: 'adres değil', model: 'x' }]);
+  const cfg = await call('/api/config');
+  assert.deepEqual(cfg.atolye, [{ id: 'a1', name: 'Kurum', url: `${llmUrl}/gw/v2`, model: 'kurum-modeli', kind: 'openai', hasKey: true },
+    { id: 'a2', name: 'Claude uyumlu', url: llmUrl, model: 'antropik-model', kind: 'anthropic', hasKey: true }]);
+  assert.ok(!JSON.stringify(cfg).includes('atolye-anahtari'), 'anahtarlar arayüze gitmez');
+  assert.equal((await call('/api/settings', { source: 'atolye', atolye: 'yok' })).code, 'no-atolye-model');
+
+  // Seçmeden önce denenir, sonra kaydedilir; Fikirhane'nin dosyasına yalnızca seçim yazılır
+  const t = await call('/api/settings/test', { source: 'atolye', atolye: 'a2' });
+  assert.deepEqual([t.ok, t.chat], [true, true], t.error);
+  const s = await call('/api/settings', { source: 'atolye', atolye: 'a2', embedModel: 'vektor-modeli' });
+  assert.deepEqual(s.settings, { url: llmUrl, chatModel: 'antropik-model', embedModel: 'vektor-modeli', hasKey: true, ready: true, kind: 'anthropic',
+    source: 'atolye', atolye: 'a2', name: 'Claude uyumlu', missing: false, manual: { url: llmUrl, chatModel: 'sohbet-modeli', hasKey: true } });
+  assert.ok(!fs.readFileSync(path.join(tmp, 'ayarlar.json'), 'utf8').includes('atolye-anahtari'), 'Atölye anahtarı Fikirhane dosyasına kopyalanmaz');
+
+  // Soru Anthropic biçiminde (/v1/messages) ve Atölye'deki anahtarla gider
+  const up = await upload('kural.txt', 'İade süresi 14 gündür. Kargo süresi üç gündür.');
+  const a = await call('/api/ask', { q: 'İade süresi kaç gün?', docs: [up.meta.id] });
+  assert.equal(a.answer, 'Anthropic biçiminde yanıt', a.error);
+  let sent = anthropic.at(-1);
+  assert.deepEqual([sent.path, sent.headers['x-api-key'], sent.headers['anthropic-version'], sent.body.model, sent.body.messages.map((m) => m.role)], ['/v1/messages', 'atolye-anahtari-2', '2023-06-01', 'antropik-model', ['user']]);
+  assert.match(sent.body.system, /Fikirhane/);
+
+  // Atölye'de model ve anahtar değişince Fikirhane'de hiçbir şey yapmadan geçerli olur
+  write([kurum, { id: 'a2', name: 'Claude uyumlu', url: llmUrl, model: 'antropik-model-2', kind: 'anthropic', key: 'yeni-anahtar' }]);
+  await call('/api/ask', { q: 'Kargo süresi?', docs: [up.meta.id] });
+  sent = anthropic.at(-1);
+  assert.deepEqual([sent.headers['x-api-key'], sent.body.model], ['yeni-anahtar', 'antropik-model-2']);
+  assert.equal((await call('/api/config')).settings.chatModel, 'antropik-model-2');
+
+  // Model Atölye'den silinirse anlaşılır hata; elle girilen sunucuya dönülünce saklı bilgiler yerindedir
+  write([kurum]);
+  const gone = (await call('/api/config')).settings;
+  assert.deepEqual([gone.ready, gone.missing, gone.hasKey], [false, true, false]);
+  assert.equal((await call('/api/ask', { q: 'İade?', docs: [up.meta.id] })).code, 'no-atolye-model');
+  const back = await call('/api/settings', { url: llmUrl, chatModel: 'sohbet-modeli' });
+  assert.deepEqual(back.settings, { url: llmUrl, chatModel: 'sohbet-modeli', embedModel: '', hasKey: true, ready: true });
+  assert.equal(JSON.parse(fs.readFileSync(path.join(tmp, 'ayarlar.json'), 'utf8')).key, 'kendi-anahtarim');
+  await call(`/api/docs/${up.meta.id}`, null, 'DELETE');
+  fs.rmSync(file);
 });
 
 test('yerel model tanımlı değilken anlamlandırma ve soru anlaşılır hata verir; arama çalışmaya devam eder', async () => {

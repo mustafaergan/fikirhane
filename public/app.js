@@ -342,12 +342,21 @@ function renderSettings(note) {
   const s = state.config.settings;
   const field = (label, input, hint) => el('label', { class: 'field' }, el('span', { text: label }), input, hint && el('small', { text: hint }));
   const inp = (value, attrs = {}) => { const i = el('input', { type: 'text', spellcheck: 'false', autocomplete: 'off', ...attrs }); i.value = value || ''; return i; };
-  const url = inp(state.draft?.url ?? s.url, { placeholder: 'http://localhost:11434' });
-  const chat = inp(state.draft?.chatModel ?? s.chatModel, { list: 'modelList', placeholder: 'qwen3:8b' });
+  // Model kaynağı: elle girilen sunucu ya da Atölye'de tanımlı bir model (src = Atölye model kimliği, elle ise boş)
+  const atolye = [...(state.config.atolye || [])];
+  if (s.source && s.missing && !atolye.some((m) => m.id === s.atolye)) atolye.push({ id: s.atolye, name: '(bulunamayan model)', model: '', url: '', kind: '', gone: true });
+  const src = state.draft?.source ?? (s.source ? s.atolye : '');
+  const picked = atolye.find((m) => m.id === src);
+  const own = s.source ? s.manual : s; // elle girilmiş sunucu (Atölye modeli seçiliyken de saklı durur)
+  const url = inp(state.draft?.url ?? own.url, { placeholder: 'http://localhost:11434' });
+  const chat = inp(state.draft?.chatModel ?? own.chatModel, { list: 'modelList', placeholder: 'qwen3:8b' });
   const embed = inp(state.draft?.embedModel ?? s.embedModel, { list: 'modelList', placeholder: 'bge-m3 (isteğe bağlı)' });
-  const key = inp('', { type: 'password', placeholder: s.hasKey ? 'Kayıtlı (değiştirmek için yenisini yazın)' : 'Çoğu yerel sunucuda gerekmez' });
-  const keep = () => { state.draft = { url: url.value, chatModel: chat.value, embedModel: embed.value }; };
-  const body = () => ({ url: url.value, chatModel: chat.value, embedModel: embed.value, key: key.value });
+  const key = inp('', { type: 'password', placeholder: own.hasKey ? 'Kayıtlı (değiştirmek için yenisini yazın)' : 'Çoğu yerel sunucuda gerekmez' });
+  const keep = () => { state.draft = { url: url.value, chatModel: chat.value, embedModel: embed.value, source: src }; };
+  const body = () => (src ? { source: 'atolye', atolye: src, embedModel: embed.value } : { url: url.value, chatModel: chat.value, embedModel: embed.value, key: key.value });
+  const source = el('select', {}, el('option', { value: '', text: 'Elle girilen sunucu' }), atolye.map((m) => el('option', { value: m.id, text: `Atölye: ${m.name}${m.model && m.model !== m.name ? ` (${m.model})` : ''}` })));
+  source.value = src;
+  source.onchange = () => { keep(); state.draft.source = source.value; renderSettings(); };
   // Dışa / içe aktarma (dosya biçimi Atölye ile ortak; API anahtarı şifreleme anahtarıyla korunur)
   const io = state.io;
   const close = el('button', { class: 'btn ghost', type: 'button', text: 'Vazgeç', onclick: () => { keep(); state.io = null; renderSettings(); } });
@@ -356,7 +365,7 @@ function renderSettings(note) {
     if (r.ok && r.choose) { state.io = { ...state.io, choose: r.choose }; return renderSettings(); }
     if (r.ok) {
       state.config.settings = r.settings; state.draft = null; state.io = null; renderChip(); render();
-      return renderSettings({ kind: 'ok', text: `İçe aktarıldı: ${r.model}. "Bağlantıyı dene" ile doğrulayın.${r.anthropic ? ' Bu kayıt Atölye\'de Anthropic uyumlu olarak tanımlı; Fikirhane OpenAI uyumlu uç noktayı kullanır, sunucu onu sunmuyorsa çalışmaz.' : ''}` });
+      return renderSettings({ kind: 'ok', text: `İçe aktarıldı: ${r.model}. "Bağlantıyı dene" ile doğrulayın.${r.anthropic ? ' Bu kayıt Anthropic uyumlu olarak tanımlı; sohbet için o biçim kullanılır.' : ''}` });
     }
     if (r.code === 'need-pass') { state.io = { ...state.io, ask: true }; return renderSettings(); }
     if (r.code !== 'bad-pass') state.io = null;
@@ -386,10 +395,13 @@ function renderSettings(note) {
           : null;
   fill($('#settingsBody'),
     el('p', { text: 'Fikirhane bu bilgisayarda ya da yerel ağınızda çalışan bir dil modeli sunucusunu kullanır (Ollama, LM Studio, llama.cpp vb.). Belgeleriniz yalnızca yazdığınız adrese gider.' }),
-    field('Sunucu adresi', url, 'Ollama: http://localhost:11434 · LM Studio: http://localhost:1234'),
-    field('Sohbet modeli', chat, 'Belgeyi okuyan ve soruları yanıtlayan model. "Bağlantıyı dene" sunucudaki modelleri listeye getirir.'),
-    field('Embedding modeli (isteğe bağlı)', embed, 'Anlamsal arama için (ör. bge-m3, nomic-embed-text). Boş bırakırsanız yalnızca kelime araması yapılır.'),
-    field('API anahtarı (isteğe bağlı)', key),
+    atolye.length > 0 && field('Model kaynağı', source, 'Atölye\'de tanımlı bir yerel modeli seçerseniz adres, model ve API anahtarı her kullanımda Atölye\'nin kaydından okunur; Atölye\'de değiştirdiğinizde burada da değişir.'),
+    src && el('div', { class: `result${picked?.gone ? ' err' : ''}`, text: picked?.gone || !picked ? 'Bu model Atölye\'de artık yok. Başka bir model seçin ya da sunucuyu elle girin.'
+      : `Sunucu: ${picked.url} · Model: ${picked.model} · ${picked.kind === 'anthropic' ? 'Anthropic uyumlu' : 'OpenAI uyumlu'} · API anahtarı: ${picked.hasKey ? 'Atölye\'de kayıtlı' : 'yok'}` }),
+    !src && field('Sunucu adresi', url, 'Ollama: http://localhost:11434 · LM Studio: http://localhost:1234'),
+    !src && field('Sohbet modeli', chat, 'Belgeyi okuyan ve soruları yanıtlayan model. "Bağlantıyı dene" sunucudaki modelleri listeye getirir.'),
+    field('Embedding modeli (isteğe bağlı)', embed, src ? 'Anlamsal arama için; aynı sunucuda olmalıdır (ör. bge-m3). Boş bırakırsanız yalnızca kelime araması yapılır.' : 'Anlamsal arama için (ör. bge-m3, nomic-embed-text). Boş bırakırsanız yalnızca kelime araması yapılır.'),
+    !src && field('API anahtarı (isteğe bağlı)', key),
     el('datalist', { id: 'modelList' }, (state.models || []).map((m) => el('option', { value: m }))),
     note && el('div', { class: `result ${note.kind}`, text: note.text }),
     el('div', { class: 'actions' },
@@ -397,7 +409,7 @@ function renderSettings(note) {
         keep(); renderSettings({ kind: '', text: 'Deneniyor… Model ilk kez yükleniyorsa bir dakika kadar sürebilir.' });
         const r = await api('/api/settings/test', body());
         if (r.models) state.models = r.models;
-        renderSettings(r.ok ? { kind: 'ok', text: `Sunucuya ulaşıldı, ${r.models.length} model var.${r.chat ? ' Sohbet modeli yanıt verdi.' : ''}${r.embed ? ` Embedding modeli çalışıyor (${r.embed} boyut).` : ''}` } : { kind: 'err', text: r.error });
+        renderSettings(r.ok ? { kind: 'ok', text: `Sunucuya ulaşıldı${r.models.length ? `, ${r.models.length} model var` : ''}.${r.chat ? ' Sohbet modeli yanıt verdi.' : ''}${r.embed ? ` Embedding modeli çalışıyor (${r.embed} boyut).` : ''}` } : { kind: 'err', text: r.error });
       } }),
       el('button', { class: 'btn primary', type: 'button', text: 'Kaydet', onclick: async () => {
         keep();
@@ -406,7 +418,7 @@ function renderSettings(note) {
         renderSettings(r.ok ? { kind: 'ok', text: 'Kaydedildi.' } : { kind: 'err', text: r.error });
       } }),
       el('span', { class: 'spacer' }),
-      s.ready && el('button', { class: 'btn', type: 'button', text: 'Dışa aktar', title: 'Yerel model ayarını dosyaya yazar (API anahtarı şifreli)', onclick: () => { keep(); state.io = { mode: 'export', pass: 'fikirhane' }; renderSettings(); } }),
+      s.ready && !s.source && !src && el('button', { class: 'btn', type: 'button', text: 'Dışa aktar', title: 'Yerel model ayarını dosyaya yazar (API anahtarı şifreli)', onclick: () => { keep(); state.io = { mode: 'export', pass: 'fikirhane' }; renderSettings(); } }),
       el('button', { class: 'btn', type: 'button', text: 'İçe aktar', title: 'Fikirhane\'den ya da Atölye\'den dışa aktarılmış yerel model dosyasını alır', onclick: () => picker.click() }),
       picker),
     ioPanel && el('div', { style: 'margin-top:12px' }, ioPanel));
@@ -421,9 +433,17 @@ function downloadJson(name, data) {
 }
 function renderChip() {
   const s = state.config.settings;
-  $('#llmChip').replaceChildren(el('span', { class: `dot ${s.ready ? 'ok' : 'warn'}` }), el('span', { text: s.ready ? `Yerel model: ${s.chatModel}` : 'Yerel model tanımlı değil (ayarla)' }));
+  $('#llmChip').replaceChildren(el('span', { class: `dot ${s.ready ? 'ok' : 'warn'}` }),
+    el('span', { text: s.ready ? `Yerel model: ${s.chatModel}${s.source ? ' (Atölye)' : ''}` : s.missing ? 'Atölye modeli bulunamadı (ayarla)' : 'Yerel model tanımlı değil (ayarla)' }));
 }
-const openSettings = () => { state.draft = null; state.io = null; renderSettings(); $('#settingsDialog').showModal(); };
+const openSettings = async () => {
+  state.draft = null; state.io = null; renderSettings(); $('#settingsDialog').showModal();
+  // Atölye'deki model listesi bu arada değişmiş olabilir: yeniden okunur
+  const c = await api('/api/config');
+  if (!c.settings) return;
+  state.config = c; renderChip();
+  if ($('#settingsDialog').open && !state.draft && !state.io && !$('#settingsBody').contains(document.activeElement)) renderSettings();
+};
 $('#settingsBtn').onclick = openSettings;
 $('#llmChip').onclick = openSettings;
 $('#settingsClose').onclick = () => $('#settingsDialog').close();

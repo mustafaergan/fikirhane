@@ -485,9 +485,12 @@ export async function startTour({ url, headless = process.env.FIKIRHANE_GEZGIN_G
   fs.mkdirSync(profilesDir(), { recursive: true });
   const profile = fs.mkdtempSync(path.join(profilesDir(), 'profil-'));
   const args = ['--remote-debugging-pipe', `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', '--disable-default-apps', '--disable-search-engine-choice-screen',
-    '--disable-features=Translate,msEdgeWelcomePage,EdgeFirstRunExperience', '--window-size=1280,900', ...(headless ? ['--headless=new'] : []), 'about:blank'];
+    '--disable-features=Translate,msEdgeWelcomePage,EdgeFirstRunExperience', '--edge-skip-compat-layer-relaunch', '--window-size=1280,900', ...(headless ? ['--headless=new'] : []), 'about:blank'];
   let proc;
-  try { proc = spawn(exe, args, { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'], windowsHide: false }); } catch (err) { fs.rmSync(profile, { recursive: true, force: true }); throw fail('browser-failed', { detail: err.message }); }
+  // Windows bazı süreçlere uyumluluk katmanı değişkeni (__COMPAT_LAYER) verir; Edge bunu görünce kendini yeniden
+  // başlatır, ilk süreç hemen kapanır ve boru bağlantısı kopar. Değişken tarayıcıya aktarılmaz.
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toUpperCase() !== '__COMPAT_LAYER'));
+  try { proc = spawn(exe, args, { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'], windowsHide: false, env }); } catch (err) { fs.rmSync(profile, { recursive: true, force: true }); throw fail('browser-failed', { detail: err.message }); }
   const tour = { id: crypto.randomBytes(4).toString('hex'), origin: start.origin, start: start.href, state: 'açık', started: new Date().toISOString(), cards: [], keys: new Map(), states: new Map(),
     sessions: new Map(), main: null, last: null, crawl: null, error: '', proc, profile, cdp: new Cdp(proc) };
   active = tour;

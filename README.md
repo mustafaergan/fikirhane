@@ -71,6 +71,13 @@ Kurum içi bir gateway de kullanılabilir: adres tam uç nokta olarak (`https://
 ya da kök olarak yazılabilir; `/v1` dışındaki sürüm yolu korunur, API anahtarı `Authorization`, `api-key` ve `x-api-key`
 başlıklarında gönderilir.
 
+**Atölye'deki modeller:** Bu bilgisayarda Atölye kuruluysa ve orada yerel model tanımlıysa Ayarlar'da "Model kaynağı"
+seçimi çıkar. Atölye'deki bir modeli seçtiğinizde adres, model ve API anahtarı her kullanımda Atölye'nin kaydından
+(`~/.atolye/yerel-llm.json`) okunur; Fikirhane'nin dosyasına yalnızca seçim yazılır, anahtar kopyalanmaz. Atölye'de
+modeli ya da anahtarı değiştirdiğinizde Fikirhane'de hiçbir şey yapmanız gerekmez; model Atölye'den silinirse Fikirhane
+bunu söyler. Atölye'de Anthropic uyumlu olarak kayıtlı sunucular da kullanılır (sohbet `/v1/messages` ile). Embedding
+modeli Atölye'de tanımlanmadığı için Fikirhane'de yazılır ve aynı sunucuda olmalıdır.
+
 **Dışa / içe aktarma:** Ayarlar'daki "Dışa aktar" yerel model ayarını `fikirhane-yerel-llm.json` dosyasına yazar; API
 anahtarı dosyada açık durmaz, yazdığınız şifreleme anahtarıyla (AES-256-GCM) şifrelenir ve "İçe aktar" aynı anahtarı
 sorar. Yanlış anahtarla hiçbir şey değişmez. Dosya biçimi Atölye'ninkiyle ortaktır: Atölye'den dışa aktarılan yerel model

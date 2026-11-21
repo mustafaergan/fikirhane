@@ -28,19 +28,68 @@ const writeJson = (file, data) => { fs.mkdirSync(path.dirname(file), { recursive
 const safeName = (name) => String(name || 'belge').replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').slice(0, 150) || 'belge';
 
 // ---------- Ayarlar (yerel model sunucusu) ----------
+// İki kaynak vardır: elle girilen sunucu (ayarlar.json içinde durur) ya da Atölye'de tanımlı bir yerel model
+// (source: "atolye"). Atölye modeli seçiliyken adres, model ve API anahtarı her kullanımda Atölye'nin kaydından
+// (~/.atolye/yerel-llm.json) okunur, buraya kopyalanmaz: Atölye'de yapılan değişiklik kendiliğinden geçerli olur.
 const settingsFile = () => path.join(home(), 'ayarlar.json');
-export function settings() {
-  const s = readJson(settingsFile(), {});
-  return { url: s.url || '', chatModel: s.chatModel || '', embedModel: s.embedModel || '', key: s.key || '' };
+const atolyeFile = () => process.env.FIKIRHANE_ATOLYE_FILE || process.env.ATOLYE_LOCAL_FILE
+  || path.join(process.env.ATOLYE_STATE_FILE ? path.dirname(process.env.ATOLYE_STATE_FILE) : path.join(os.homedir(), '.atolye'), 'yerel-llm.json');
+const line = (v, n) => String(v || '').replace(/\s+/g, ' ').trim().slice(0, n);
+const kindOf = (m) => (/\/chat\/completions\/?$/i.test(String(m.url).trim()) || m.kind === 'openai' ? 'openai' : 'anthropic'); // Atölye'deki kuralla aynı
+function atolyeModels() {
+  const d = readJson(atolyeFile(), null);
+  return (Array.isArray(d?.models) ? d.models : []).filter((m) => m && m.id && llm.validUrl(m.url) && line(m.model, 120)).slice(0, 50)
+    .map((m) => ({ id: String(m.id), name: line(m.name, 40) || line(m.model, 120), url: llm.base(m.url), model: line(m.model, 120), kind: kindOf(m), key: String(m.key || '') }));
 }
-export const publicSettings = () => { const s = settings(); return { url: s.url, chatModel: s.chatModel, embedModel: s.embedModel, hasKey: Boolean(s.key), ready: Boolean(s.url && s.chatModel) }; };
-export function saveSettings({ url, chatModel, embedModel, key } = {}) {
+/** Atölye'de tanımlı yerel modeller (API anahtarları hariç); Atölye yoksa ya da model tanımlı değilse boş */
+export const atolyeList = () => atolyeModels().map((m) => ({ id: m.id, name: m.name, url: m.url, model: m.model, kind: m.kind, hasKey: Boolean(m.key) }));
+
+const stored = () => {
+  const s = readJson(settingsFile(), {});
+  return { url: s.url || '', chatModel: s.chatModel || '', embedModel: s.embedModel || '', key: s.key || '', kind: s.kind === 'anthropic' ? 'anthropic' : 'openai',
+    source: s.source === 'atolye' ? 'atolye' : '', atolye: String(s.atolye || '') };
+};
+/** Geçerli ayar. kind: "openai" ya da "anthropic" (uç nokta biçimi). Atölye modeli silinmişse missing: true. */
+export function settings() {
+  const s = stored();
+  if (s.source !== 'atolye') return { url: s.url, chatModel: s.chatModel, embedModel: s.embedModel, key: s.key, kind: s.kind, source: '' };
+  const m = atolyeModels().find((x) => x.id === s.atolye);
+  return m ? { url: m.url, chatModel: m.model, embedModel: s.embedModel, key: m.key, kind: m.kind, source: 'atolye', atolye: m.id, name: m.name }
+    : { url: '', chatModel: '', embedModel: s.embedModel, key: '', kind: 'openai', source: 'atolye', atolye: s.atolye, name: '', missing: true };
+}
+const noModel = (cfg) => fail(cfg.missing ? 'no-atolye-model' : 'no-llm');
+export const publicSettings = () => {
+  const s = settings();
+  const own = stored();
+  return { url: s.url, chatModel: s.chatModel, embedModel: s.embedModel, hasKey: Boolean(s.key), ready: Boolean(s.url && s.chatModel), ...(s.kind === 'anthropic' ? { kind: 'anthropic' } : {}),
+    ...(s.source ? { source: s.source, atolye: s.atolye, name: s.name, missing: Boolean(s.missing), manual: { url: own.url, chatModel: own.chatModel, hasKey: Boolean(own.key) } } : {}) };
+};
+export function saveSettings({ url, chatModel, embedModel, key, source, atolye } = {}) {
+  const old = stored();
+  if (source === 'atolye') { // elle girilmiş sunucu bilgisi silinmez; kaynağa geri dönülebilir
+    if (!atolyeModels().some((m) => m.id === String(atolye))) throw fail('no-atolye-model');
+    writeJson(settingsFile(), { ...old, embedModel: line(embedModel, 120), source: 'atolye', atolye: String(atolye) });
+    return publicSettings();
+  }
   const u = llm.base(url);
   if (!llm.validUrl(u)) throw fail('bad-url');
-  const old = settings();
   writeJson(settingsFile(), { url: u, chatModel: String(chatModel || '').trim(), embedModel: String(embedModel || '').trim(),
-    key: String(key || '').trim() || (old.url === u ? old.key : '') }); // anahtar boşsa eskisi kalır; ama başka bir sunucuya taşınmaz
+    key: String(key || '').trim() || (old.url === u ? old.key : ''), // anahtar boşsa eskisi kalır; ama başka bir sunucuya taşınmaz
+    kind: old.url === u ? old.kind : 'openai', source: '', atolye: '' });
   return publicSettings();
+}
+/** "Bağlantıyı dene" için: henüz kaydedilmemiş ayarın (ya da seçilen Atölye modelinin) bağlantı bilgisi */
+export function draftSettings({ url, key, chatModel, embedModel, source, atolye } = {}) {
+  if (source === 'atolye') {
+    const m = atolyeModels().find((x) => x.id === String(atolye));
+    if (!m) throw fail('no-atolye-model');
+    return { url: m.url, key: m.key, kind: m.kind, chatModel: m.model, embedModel: line(embedModel, 120) };
+  }
+  const old = stored();
+  const u = llm.base(url || old.url);
+  if (!llm.validUrl(u)) throw fail('bad-url');
+  const same = u === old.url;
+  return { url: u, key: String(key || '').trim() || (same ? old.key : ''), kind: same ? old.kind : 'openai', chatModel: line(chatModel, 120), embedModel: line(embedModel, 120) };
 }
 
 // Dışa / içe aktarma: yerel model ayarı tek bir JSON dosyasına yazılır. Dosya biçimi Atölye'ninkiyle aynıdır
@@ -61,7 +110,7 @@ export function exportSettings({ pass } = {}) {
     return { iv: iv.toString('base64'), tag: c.getAuthTag().toString('base64'), data: data.toString('base64') };
   };
   return { app: 'atolye', type: 'yerel-llm', version: 1, from: 'fikirhane', salt: salt.toString('base64'),
-    models: [{ name: s.chatModel, url: s.url, model: s.chatModel, kind: 'openai', ...(s.embedModel ? { embedModel: s.embedModel } : {}), ...(s.key ? { key: seal(s.key) } : {}) }] };
+    models: [{ name: s.chatModel, url: s.url, model: s.chatModel, kind: s.kind, ...(s.embedModel ? { embedModel: s.embedModel } : {}), ...(s.key ? { key: seal(s.key) } : {}) }] };
 }
 
 /**
@@ -88,17 +137,18 @@ export function importSettings({ data, pass, pick } = {}) {
   const keys = models.map((m) => (m.key ? open(m.key) : '')); // bütün anahtarlar çözülür: yanlış anahtar seçimden önce anlaşılır
   const text = (v, n) => String(v || '').replace(/\s+/g, ' ').trim().slice(0, n);
   if (models.length > 1 && (pick === undefined || pick === null || pick === '')) {
-    return { choose: models.map((m, i) => ({ i, name: text(m.name, 40) || text(m.model, 120), url: llm.base(m.url), model: text(m.model, 120), kind: m.kind === 'anthropic' ? 'anthropic' : 'openai' })) };
+    return { choose: models.map((m, i) => ({ i, name: text(m.name, 40) || text(m.model, 120), url: llm.base(m.url), model: text(m.model, 120), kind: kindOf(m) })) };
   }
   const i = models.length > 1 ? Number(pick) : 0;
   const m = models[i];
   if (!m) throw fail('not-found');
-  const old = settings();
+  const old = stored();
   const url = llm.base(m.url);
   // Embedding modeli dosyada yoksa (Atölye dosyası) ve sunucu aynıysa var olan korunur
-  writeJson(settingsFile(), { url, chatModel: text(m.model, 120), embedModel: text(m.embedModel, 120) || (old.url === url ? old.embedModel : ''), key: keys[i] });
+  writeJson(settingsFile(), { url, chatModel: text(m.model, 120), embedModel: text(m.embedModel, 120) || (old.url === url ? old.embedModel : ''), key: keys[i],
+    kind: kindOf(m), source: '', atolye: '' });
   // Atölye'de Anthropic uyumlu diye kayıtlı sunucu OpenAI uç noktasını da sunuyor olabilir (Ollama gibi) ya da olmayabilir
-  return { settings: publicSettings(), model: text(m.model, 120), anthropic: m.kind === 'anthropic' };
+  return { settings: publicSettings(), model: text(m.model, 120), anthropic: kindOf(m) === 'anthropic' };
 }
 
 // ---------- Belgeler ----------
@@ -285,9 +335,9 @@ export function understand(id) {
   const meta = metaOf(id);
   if (!meta) throw fail('not-found');
   const cfg = settings();
-  if (!cfg.url || !cfg.chatModel) throw fail('no-llm');
+  if (!cfg.url || !cfg.chatModel) throw noModel(cfg);
   const sections = makeSections(part(id, 'sayfalar.json', []));
-  const ask = (system, user, signal, maxTokens) => llm.chat({ url: cfg.url, key: cfg.key, model: cfg.chatModel, signal, maxTokens, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] });
+  const ask = (system, user, signal, maxTokens) => llm.chat({ url: cfg.url, key: cfg.key, kind: cfg.kind, model: cfg.chatModel, signal, maxTokens, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] });
   const site = meta.kind === 'site';
   const P = site ? { note: PROMPT.siteNote, map: PROMPT.siteMap, questions: PROMPT.siteQuestions } : PROMPT;
   return startJob(id, 'anlamlandırma', sections.length + 2, async (job) => {
@@ -377,7 +427,7 @@ export async function ask(q, docIds = []) {
   const question = String(q || '').trim();
   if (!question) throw fail('empty');
   const cfg = settings();
-  if (!cfg.url || !cfg.chatModel) throw fail('no-llm');
+  if (!cfg.url || !cfg.chatModel) throw noModel(cfg);
   const sources = await search(question, docIds, 8);
   const docs = listDocs().filter((d) => (docIds.length ? docIds.includes(d.id) : sources.some((s) => s.doc === d.id)));
   const maps = [];
@@ -393,7 +443,7 @@ export async function ask(q, docIds = []) {
     mine.length ? `# Kullanıcının notları (belgeden değil, kullanıcıdan)\n${mine.join('\n').slice(0, 4000)}` : '',
     sources.length ? `# Kaynak parçalar\n${sources.map((s) => `[${s.name} s.${s.page}]\n${s.text}`).join('\n\n')}` : '# Kaynak parçalar\n(Soruyla eşleşen bölüm bulunamadı.)',
   ].filter(Boolean).join('\n\n');
-  const answer = await llm.chat({ url: cfg.url, key: cfg.key, model: cfg.chatModel, maxTokens: 1200, messages: [{ role: 'system', content: PROMPT.answer }, { role: 'user', content: `${context}\n\n# Soru\n${question}` }] });
+  const answer = await llm.chat({ url: cfg.url, key: cfg.key, kind: cfg.kind, model: cfg.chatModel, maxTokens: 1200, messages: [{ role: 'system', content: PROMPT.answer }, { role: 'user', content: `${context}\n\n# Soru\n${question}` }] });
   return { answer, sources };
 }
 

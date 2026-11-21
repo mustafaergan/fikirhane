@@ -6,7 +6,7 @@ export const base = (url) => String(url || '').trim().replace(/\/+$/, '').replac
 /** API kökü: adres bir sürüm yoluyla (/v2 gibi) bitiyorsa o, değilse /v1 eklenir */
 const api = (url) => { const u = base(url); return /\/v\d+$/i.test(u) ? u : `${u}/v1`; };
 // Kurum içi gateway'ler anahtarı farklı başlıklarda bekleyebilir; üçü birden gönderilir
-const headers = (key) => ({ 'content-type': 'application/json', ...(key ? { authorization: `Bearer ${key}`, 'api-key': key, 'x-api-key': key } : {}) });
+const headers = (key) => ({ 'content-type': 'application/json', 'anthropic-version': '2023-06-01', ...(key ? { authorization: `Bearer ${key}`, 'api-key': key, 'x-api-key': key } : {}) });
 const fail = (code, detail, status) => Object.assign(new Error(detail || code), { code, detail, status });
 
 export function validUrl(url) {
@@ -37,19 +37,27 @@ export async function listModels({ url, key }) {
   return (Array.isArray(d?.models) ? d.models : []).map((m) => m?.name).filter(Boolean);
 }
 
-/** Modele mesajları gönderir, yanıt metnini döndürür */
-export async function chat({ url, key, model, messages, temperature = 0.2, maxTokens = 1200, timeoutMs = 600_000, signal }) {
-  const post = (extra) => request(`${api(url)}/chat/completions`, { method: 'POST', key, timeoutMs, signal, body: { model, messages, stream: false, ...extra } });
-  let d;
-  try {
-    d = await post({ temperature, max_tokens: maxTokens });
-  } catch (err) {
-    // Bazı sunucular ve modeller temperature ya da max_tokens alanını reddeder: istek bu alanlar olmadan yinelenir
-    if (err.status !== 400 && err.status !== 422) throw err;
-    d = await post({});
+/**
+ * Modele mesajları gönderir, yanıt metnini döndürür. kind: "openai" (…/chat/completions; varsayılan) ya da
+ * "anthropic" (…/v1/messages; Atölye'de Anthropic uyumlu olarak kayıtlı sunucular için).
+ */
+export async function chat({ url, key, kind, model, messages, temperature = 0.2, maxTokens = 1200, timeoutMs = 600_000, signal }) {
+  const send = (endpoint, body) => request(endpoint, { method: 'POST', key, timeoutMs, signal, body });
+  // Bazı sunucular ve modeller temperature (ya da max_tokens) alanını reddeder: istek bu alan olmadan yinelenir
+  const retry = async (first, second) => { try { return await first(); } catch (err) { if (err.status !== 400 && err.status !== 422) throw err; return second(); } };
+  let text;
+  if (kind === 'anthropic') {
+    const system = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
+    const body = { model, max_tokens: maxTokens, messages: messages.filter((m) => m.role !== 'system'), ...(system ? { system } : {}) };
+    const d = await retry(() => send(`${api(url)}/messages`, { ...body, temperature }), () => send(`${api(url)}/messages`, body));
+    text = Array.isArray(d?.content) ? d.content.filter((p) => p?.type === 'text').map((p) => p.text).join('') : null;
+    if (typeof text !== 'string' || (!text && !Array.isArray(d?.content))) throw fail('bad-response', JSON.stringify(d).slice(0, 200));
+  } else {
+    const body = { model, messages, stream: false };
+    const d = await retry(() => send(`${api(url)}/chat/completions`, { ...body, temperature, max_tokens: maxTokens }), () => send(`${api(url)}/chat/completions`, body));
+    text = d?.choices?.[0]?.message?.content;
+    if (typeof text !== 'string') throw fail('bad-response', JSON.stringify(d).slice(0, 200));
   }
-  const text = d?.choices?.[0]?.message?.content;
-  if (typeof text !== 'string') throw fail('bad-response', JSON.stringify(d).slice(0, 200));
   // Düşünen modellerin <think> bölümü yanıta alınmaz
   return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
 }

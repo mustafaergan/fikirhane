@@ -11,7 +11,11 @@ import http from 'node:http';
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fikirhane-gezgin-test-'));
 process.env.FIKIRHANE_HOME = tmp;
 process.env.FIKIRHANE_UPDATE_CHECK = '0';
+process.env.FIKIRHANE_ATOLYE_FILE = path.join(tmp, 'atolye-yerel-llm.json'); // gerçek ~/.atolye okunmaz
 process.env.FIKIRHANE_GEZGIN_GIZLI = '1'; // pencere açılmaz
+// Windows'un bazı süreçlere verdiği uyumluluk değişkeni: Edge bunu görünce kendini yeniden başlatır ve bağlantı kopar.
+// Gezgin değişkeni tarayıcıya aktarmamalı; testler bu ortamda da geçmeli.
+process.env.__COMPAT_LAYER = 'DetectorsAppHealth';
 const gezgin = await import('../src/gezgin.js');
 const { createServer } = await import('../src/server.js');
 const noBrowser = gezgin.findBrowser() ? false : 'Edge ya da Chrome bulunamadı';

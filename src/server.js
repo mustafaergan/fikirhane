@@ -18,6 +18,7 @@ const MAX_UPLOAD = 300 * 1024 * 1024;
 const MESSAGES = {
   'bad-url': 'Geçerli bir adres girin (http://… ile başlamalı, ör. http://localhost:11434)',
   'no-llm': 'Yerel model ayarlı değil. Ayarlar\'dan sunucu adresini ve sohbet modelini girin.',
+  'no-atolye-model': 'Seçili Atölye modeli bulunamadı; Atölye tarafında silinmiş olabilir. Ayarlar penceresinden yeniden seçin.',
   'no-embed': 'Anlamsal dizin için Ayarlar\'da bir embedding modeli seçin.',
   'unreachable': 'Yerel model sunucusuna ulaşılamadı. Sunucunun çalıştığını ve adresi kontrol edin.',
   'not-found': 'Bulunamadı.',
@@ -55,18 +56,18 @@ export function createServer({ port = 3310, host = '127.0.0.1' } = {}) {
   const send = (res, code, data) => { const body = JSON.stringify(data); res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(body); };
 
   const routes = [
-    ['GET', /^\/api\/config$/, async () => ({ app: 'fikirhane', version, settings: lib.publicSettings(), home: lib.home() })],
+    ['GET', /^\/api\/config$/, async () => ({ app: 'fikirhane', version, settings: lib.publicSettings(), atolye: lib.atolyeList(), home: lib.home() })],
     ['POST', /^\/api\/settings$/, async (_m, body) => ({ ok: true, settings: lib.saveSettings(body) })],
     ['POST', /^\/api\/settings\/export$/, async (_m, body) => { const file = lib.exportSettings(body); console.log('[ayarlar] yerel model ayarı dışa aktarıldı'); return { ok: true, file }; }],
     ['POST', /^\/api\/settings\/import$/, async (_m, body) => { const r = lib.importSettings(body); if (r.settings) console.log('[ayarlar] yerel model ayarı içe aktarıldı'); return { ok: true, ...r }; }],
     ['POST', /^\/api\/settings\/test$/, async (_m, body) => {
-      const cur = lib.settings();
-      const cfg = { url: body.url || cur.url, key: body.key || cur.key };
-      if (!llm.validUrl(cfg.url)) throw Object.assign(new Error('bad-url'), { code: 'bad-url' });
-      const models = await llm.listModels(cfg);
+      const cfg = lib.draftSettings(body); // elle girilen adres ya da seçilen Atölye modeli
+      let models = [];
+      // Model listesi sunmayan sunucular (bazı gateway'ler) için: sohbet modeli belliyse liste hatası denemeyi durdurmaz
+      try { models = await llm.listModels(cfg); } catch (err) { if (err.code === 'unreachable' || !cfg.chatModel) throw err; }
       const out = { ok: true, models, chat: null, embed: null };
-      if (body.chatModel) { await llm.chat({ ...cfg, model: body.chatModel, maxTokens: 16, timeoutMs: 120_000, messages: [{ role: 'user', content: 'Merhaba' }] }); out.chat = true; }
-      if (body.embedModel) { out.embed = (await llm.embed({ ...cfg, model: body.embedModel, input: ['deneme'], timeoutMs: 120_000 }))[0].length; }
+      if (cfg.chatModel) { await llm.chat({ ...cfg, model: cfg.chatModel, maxTokens: 16, timeoutMs: 120_000, messages: [{ role: 'user', content: 'Merhaba' }] }); out.chat = true; }
+      if (cfg.embedModel) { out.embed = (await llm.embed({ ...cfg, model: cfg.embedModel, input: ['deneme'], timeoutMs: 120_000 }))[0].length; }
       return out;
     }],
     ['GET', /^\/api\/docs$/, async () => ({ docs: lib.listDocs().map((d) => ({ ...d, job: lib.jobOf(d.id) })) })],
